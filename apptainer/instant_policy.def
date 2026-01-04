@@ -1,0 +1,127 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-devel-ubuntu20.04
+
+%labels
+    Author kanth042
+    Description Instant Policy + RLBench + CoppeliaSim with VNC for MSI cluster
+
+%environment
+    export PATH=/opt/miniforge/envs/ip/bin:/opt/miniforge/bin:$PATH
+    export COPPELIASIM_ROOT=/opt/CoppeliaSim
+    export LD_LIBRARY_PATH=$COPPELIASIM_ROOT:$LD_LIBRARY_PATH
+    export QT_QPA_PLATFORM_PLUGIN_PATH=$COPPELIASIM_ROOT
+    export DISPLAY=:1
+
+%post
+    # Prevent interactive prompts
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Chicago
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+    # System dependencies
+    apt-get update && apt-get install -y \
+        wget curl git unzip \
+        xvfb x11vnc fluxbox \
+        libgl1-mesa-glx libgl1-mesa-dri \
+        libxcb-xinerama0 libxkbcommon-x11-0 \
+        libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+        libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+        libxcb-xfixes0 libxcb-sync1 \
+        python3-dev python3-pip \
+        libavcodec-dev libavformat-dev libswscale-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+    # ============================================
+    # CoppeliaSim V4.1.0 (MUST be installed before PyRep)
+    # ============================================
+    cd /opt
+    wget --no-check-certificate https://www.coppeliarobotics.com/files/V4_1_0/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04.tar.xz
+    tar -xf CoppeliaSim_Edu_V4_1_0_Ubuntu20_04.tar.xz
+    mv CoppeliaSim_Edu_V4_1_0_Ubuntu20_04 CoppeliaSim
+    rm CoppeliaSim_Edu_V4_1_0_Ubuntu20_04.tar.xz
+
+    # Remove GUI plugins that cause segfault in headless VNC
+    rm -f /opt/CoppeliaSim/libsimExtCustomUI.so
+    rm -f /opt/CoppeliaSim/libsimExtCodeEditor.so
+
+    # Set CoppeliaSim env for PyRep build
+    export COPPELIASIM_ROOT=/opt/CoppeliaSim
+    export LD_LIBRARY_PATH=$COPPELIASIM_ROOT:$LD_LIBRARY_PATH
+    export QT_QPA_PLATFORM_PLUGIN_PATH=$COPPELIASIM_ROOT
+
+    # ============================================
+    # Miniforge (conda-forge)
+    # ============================================
+    wget --no-check-certificate https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p /opt/miniforge
+    rm /tmp/miniforge.sh
+    
+    # Create conda env and SET PATH (not conda activate!)
+    /opt/miniforge/bin/conda create -y -n ip python=3.10 pip
+    export PATH=/opt/miniforge/envs/ip/bin:/opt/miniforge/bin:$PATH
+    
+    # Verify we're using the right pip
+    which pip  # Should show /opt/miniforge/envs/ip/bin/pip
+
+    # ============================================
+    # PyTorch 2.2.0 + CUDA 12.1
+    # ============================================
+    pip install --no-cache-dir torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121
+
+    # ============================================
+    # PyTorch Geometric 2.5.0 + extensions
+    # ============================================
+    pip install --no-cache-dir torch-geometric==2.5.0
+    pip install --no-cache-dir pyg-lib torch-scatter torch-sparse torch-cluster torch-spline-conv \
+        -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+
+    # ============================================
+    # Instant Policy dependencies
+    # ============================================
+    pip install --no-cache-dir \
+        lightning==2.4.0 \
+        pytorch-lightning==2.4.0 \
+        diffusers==0.31.0 \
+        transformers==4.46.2 \
+        accelerate==1.1.1 \
+        numpy==1.26.4 \
+        scipy==1.14.1 \
+        scikit-learn==1.5.1 \
+        open3d==0.18.0 \
+        gymnasium==1.0.0 \
+        wandb==0.18.7 \
+        matplotlib==3.9.2 \
+        pandas==2.2.3 \
+        configargparse==1.7 \
+        pyquaternion==0.9.9 \
+        pillow \
+        natsort \
+        gdown \
+        cffi
+
+    # ============================================
+    # PyRep (needs COPPELIASIM_ROOT)
+    # ============================================
+    pip install --no-cache-dir git+https://github.com/stepjam/PyRep.git
+
+    # ============================================
+    # RLBench
+    # ============================================
+    pip install --no-cache-dir git+https://github.com/stepjam/RLBench.git
+
+    # ============================================
+    # Verify installation
+    # ============================================
+    python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+    python -c "import torch_geometric; print(f'PyG: {torch_geometric.__version__}')"
+    python -c "import lightning; print(f'Lightning: {lightning.__version__}')"
+    python -c "import pyrep; print('PyRep: OK')"
+    python -c "import rlbench; print('RLBench: OK')"
+
+    # Cleanup
+    apt-get clean
+    pip cache purge
+    /opt/miniforge/bin/conda clean -a -y
+
+%runscript
+    exec "$@"
