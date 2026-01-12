@@ -153,40 +153,8 @@ class AGI(torch.nn.Module):
         return gripper_points
 
     def forward(self, data):
-        if not hasattr(data, 'demo_scene_node_embds'):
-            data.demo_scene_node_embds, data.demo_scene_node_pos = self.get_demo_scene_emb(data)
-
-        if not hasattr(data, 'live_scene_node_embds'):
-            data.live_scene_node_embds, data.live_scene_node_pos = self.get_live_scene_emb(data)
-        ################################################################################################################
-        current_obs = to_dense_batch(data.pos_obs, data.batch_pos_obs, fill_value=0)[0]
-        current_obs = current_obs[:, None, ...].repeat(1, self.pred_horizon, 1, 1)
-        current_obs = current_obs.view(self.batch_size * self.pred_horizon, -1, 3)
-        actions = data.actions.view(-1, 4, 4)
-
-        current_obs = torch.bmm(actions[:, :3, :3].transpose(1, 2), current_obs.permute(0, 2, 1)).permute(0, 2, 1)
-        current_obs -= actions[:, :3, 3][:, None, :]
-
-        action_batch = torch.arange(current_obs.shape[0], device=current_obs.device)[:, None].repeat(1,
-                                                                                                     current_obs.shape[
-                                                                                                         1])
-        action_batch = action_batch.view(-1)
-        current_obs = current_obs.reshape(-1, 3)
-
-        pos_obs_old = data.pos_obs.clone()
-        batch_pos_obs_old = data.batch_pos_obs.clone()
-
-        data.pos_obs = current_obs
-        data.batch_pos_obs = action_batch
-
-        action_scene_node_embds, action_scene_node_pos = self.get_live_scene_emb(data)
-
-        data.pos_obs = pos_obs_old
-        data.batch_pos_obs = batch_pos_obs_old
-
-        data.action_scene_node_embds = action_scene_node_embds.view(self.batch_size, self.pred_horizon,
-                                                                    -1, self.local_embd_dim)
-        data.action_scene_node_pos = action_scene_node_pos.view(self.batch_size, self.pred_horizon, -1, 3)
+        self._ensure_scene_embeddings(data)
+        self._populate_action_scene_embeddings(data)
         ################################################################################################################
         self.graph.update_graph(data)
 
@@ -216,6 +184,61 @@ class AGI(torch.nn.Module):
         preds = torch.cat([preds_t, preds_rot, preds_g], dim=-1)
         return preds
 
+    def get_demo_bottleneck(self, data):
+        # Extract the demo-conditioned bottleneck (current gripper nodes after cond_encoder).
+        batch_size = data.actions.shape[0]
+        if batch_size != self.batch_size:
+            self.reinit_graphs(batch_size, num_demos=self.num_demos)
+
+        with torch.no_grad():
+            self._ensure_scene_embeddings(data)
+            self._populate_action_scene_embeddings(data)
+            self.graph.update_graph(data)
+
+            x_dict = self.local_encoder(self.graph.graph.x_dict,
+                                        self.graph.graph.edge_index_dict,
+                                        self.graph.graph.edge_attr_dict)
+            x_dict = self.cond_encoder(x_dict,
+                                       self.graph.graph.edge_index_dict,
+                                       self.graph.graph.edge_attr_dict)
+
+            current_mask = self._get_current_gripper_mask()
+            bottleneck = x_dict['gripper'][current_mask].view(batch_size,
+                                                              self.graph.num_g_nodes,
+                                                              -1)
+        return bottleneck
+
+    def forward_from_bottleneck(self, data, bottleneck):
+        # Run the action decoder path starting from a provided current-gripper bottleneck.
+        batch_size = data.actions.shape[0]
+        if batch_size != self.batch_size:
+            self.reinit_graphs(batch_size, num_demos=self.num_demos)
+
+        self._ensure_scene_embeddings(data)
+        self._populate_action_scene_embeddings(data)
+        self.graph.update_graph(data)
+
+        x_dict = self.local_encoder(self.graph.graph.x_dict,
+                                    self.graph.graph.edge_index_dict,
+                                    self.graph.graph.edge_attr_dict)
+
+        current_mask = self._get_current_gripper_mask()
+        x_dict['gripper'][current_mask] = bottleneck.view(-1, bottleneck.shape[-1])
+
+        x_dict = self.action_encoder(x_dict,
+                                     self.graph.graph.edge_index_dict,
+                                     self.graph.graph.edge_attr_dict)
+
+        x_gripper = x_dict['gripper'][self.graph.graph.gripper_time > self.traj_horizon].view(batch_size,
+                                                                                              self.pred_horizon,
+                                                                                              self.graph.num_g_nodes,
+                                                                                              -1)
+        preds_t = self.prediction_head(x_gripper)
+        preds_rot = self.prediction_head_rot(x_gripper)
+        preds_g = self.prediction_head_g(x_gripper)
+        preds = torch.cat([preds_t, preds_rot, preds_g], dim=-1)
+        return preds
+
     def get_demo_scene_emb(self, data):
         bs = data.actions.shape[0]
         demo_scene_node_embds, demo_scene_node_pos, demo_scene_node_batch = \
@@ -237,3 +260,43 @@ class AGI(torch.nn.Module):
         current_scene_node_embds = to_dense_batch(current_scene_node_embds, current_scene_node_batch, fill_value=0)[0]
         current_scene_node_pos = to_dense_batch(current_scene_node_pos, current_scene_node_batch, fill_value=0)[0]
         return current_scene_node_embds, current_scene_node_pos
+
+    def _get_current_gripper_mask(self):
+        return self.graph.graph.gripper_time == self.traj_horizon
+
+    def _ensure_scene_embeddings(self, data):
+        if not hasattr(data, 'demo_scene_node_embds'):
+            data.demo_scene_node_embds, data.demo_scene_node_pos = self.get_demo_scene_emb(data)
+
+        if not hasattr(data, 'live_scene_node_embds'):
+            data.live_scene_node_embds, data.live_scene_node_pos = self.get_live_scene_emb(data)
+
+    def _populate_action_scene_embeddings(self, data):
+        current_obs = to_dense_batch(data.pos_obs, data.batch_pos_obs, fill_value=0)[0]
+        current_obs = current_obs[:, None, ...].repeat(1, self.pred_horizon, 1, 1)
+        current_obs = current_obs.view(self.batch_size * self.pred_horizon, -1, 3)
+        actions = data.actions.view(-1, 4, 4)
+
+        current_obs = torch.bmm(actions[:, :3, :3].transpose(1, 2), current_obs.permute(0, 2, 1)).permute(0, 2, 1)
+        current_obs -= actions[:, :3, 3][:, None, :]
+
+        action_batch = torch.arange(current_obs.shape[0], device=current_obs.device)[:, None].repeat(1,
+                                                                                                     current_obs.shape[
+                                                                                                         1])
+        action_batch = action_batch.view(-1)
+        current_obs = current_obs.reshape(-1, 3)
+
+        pos_obs_old = data.pos_obs.clone()
+        batch_pos_obs_old = data.batch_pos_obs.clone()
+
+        data.pos_obs = current_obs
+        data.batch_pos_obs = action_batch
+
+        action_scene_node_embds, action_scene_node_pos = self.get_live_scene_emb(data)
+
+        data.pos_obs = pos_obs_old
+        data.batch_pos_obs = batch_pos_obs_old
+
+        data.action_scene_node_embds = action_scene_node_embds.view(self.batch_size, self.pred_horizon,
+                                                                    -1, self.local_embd_dim)
+        data.action_scene_node_pos = action_scene_node_pos.view(self.batch_size, self.pred_horizon, -1, 3)

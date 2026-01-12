@@ -62,6 +62,11 @@ GUI segfaults:
 - Use the default `/opt/CoppeliaSim` path (do not set `COPPELIASIM_USE_COPY=1`).
 - The script already enables `--writable-tmpfs` and creates `~/.CoppeliaSim`.
 
+Update popup blocks the sim:
+- The run script disables update checks in user and install configs:
+  `~/.CoppeliaSim/system/usrset.txt`, `~/CoppeliaSim/system/usrset.txt`,
+  `~/.config/CoppeliaSim/system/usrset.txt`, and `$COPPELIASIM_ROOT/system/usrset.txt`.
+
 GPU missing:
 - Check allocation: `nvidia-smi`
 - Ensure you are on a GPU node.

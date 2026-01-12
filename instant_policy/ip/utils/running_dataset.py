@@ -6,7 +6,8 @@ from scipy.spatial.transform import Rotation as Rot
 
 
 class RunningDataset(Dataset):
-    def __init__(self, data_path, num_samples, rec=False, rand_g_prob=0.0, random_rotation=False):
+    def __init__(self, data_path, num_samples, rec=False, rand_g_prob=0.0, random_rotation=False,
+                 require_lang=False):
         self.data_path = data_path
         self.num_samples = num_samples
         self.rand_g_prob = rand_g_prob
@@ -33,6 +34,8 @@ class RunningDataset(Dataset):
                 'actions',
                 'actions_grip',
             ]
+            if require_lang:
+                self.data_attr.append('lang_emb')
 
     def __len__(self):
         return self.num_samples

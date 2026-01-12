@@ -72,7 +72,37 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         export TRANSFORMERS_CACHE=/workspace/data/.cache/huggingface
         export HF_HOME=/workspace/data/.cache/huggingface
         export MPLCONFIGDIR=/workspace/data/.cache/matplotlib
-        mkdir -p /workspace/data/.cache/huggingface /workspace/data/.cache/matplotlib /workspace/data/.fluxbox /workspace/data/.CoppeliaSim
+        mkdir -p /workspace/data/.cache/huggingface /workspace/data/.cache/matplotlib /workspace/data/.fluxbox \
+            /workspace/data/.CoppeliaSim /workspace/data/.CoppeliaSim/system \
+            /workspace/data/CoppeliaSim /workspace/data/CoppeliaSim/system \
+            /workspace/data/.config/CoppeliaSim /workspace/data/.config/CoppeliaSim/system
+
+        # Disable CoppeliaSim update popup (can block the sim)
+        disable_updates() {
+            local file=\"\$1\"
+            [ -z \"\$file\" ] && return 0
+            mkdir -p \"\$(dirname \"\$file\")\"
+            if [ ! -f \"\$file\" ]; then
+                printf 'checkForUpdates=0\ncheckForUpdatesOnStartup=0\n' > \"\$file\"
+                return 0
+            fi
+            if grep -q '^checkForUpdates=' \"\$file\"; then
+                sed -i 's/^checkForUpdates=.*/checkForUpdates=0/' \"\$file\"
+            else
+                printf '\ncheckForUpdates=0\n' >> \"\$file\"
+            fi
+            if grep -q '^checkForUpdatesOnStartup=' \"\$file\"; then
+                sed -i 's/^checkForUpdatesOnStartup=.*/checkForUpdatesOnStartup=0/' \"\$file\"
+            else
+                printf '\ncheckForUpdatesOnStartup=0\n' >> \"\$file\"
+            fi
+        }
+        disable_updates /workspace/data/.CoppeliaSim/usrset.txt
+        disable_updates /workspace/data/.CoppeliaSim/system/usrset.txt
+        disable_updates /workspace/data/CoppeliaSim/usrset.txt
+        disable_updates /workspace/data/CoppeliaSim/system/usrset.txt
+        disable_updates /workspace/data/.config/CoppeliaSim/usrset.txt
+        disable_updates /workspace/data/.config/CoppeliaSim/system/usrset.txt
 
         # Ensure Qt runtime dir exists (prevents XDG_RUNTIME_DIR warnings/crashes)
         if [ -z \"\${XDG_RUNTIME_DIR:-}\" ] || [ ! -d \"\$XDG_RUNTIME_DIR\" ]; then
@@ -110,6 +140,9 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         export COPPELIASIM_ROOT=\$COPPELIASIM_ROOT
         export LD_LIBRARY_PATH=\$COPPELIASIM_ROOT:\$LD_LIBRARY_PATH
         export QT_QPA_PLATFORM_PLUGIN_PATH=\$COPPELIASIM_ROOT
+        export COPPELIASIM_USER_SETTINGS_DIR=/workspace/data/.CoppeliaSim
+        export VREP_USER_SETTINGS_DIR=/workspace/data/.CoppeliaSim
+        disable_updates \"\$COPPELIASIM_ROOT/system/usrset.txt\"
 
         # Prefer system libstdc++/libgcc to avoid conda conflicts with CoppeliaSim
         SYS_LIBSTDCPP=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
