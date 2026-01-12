@@ -36,6 +36,7 @@ class LanguageConditionedEncoder(nn.Module):
                     ('gripper', 'rel', 'gripper'),
                     ('language', 'lang_to_scene', 'scene'),
                     ('language', 'lang_to_gripper', 'gripper'),
+                    ('language', 'lang_self', 'language'),
                 ]
             ),
             edge_dim=self.edge_dim,
@@ -113,6 +114,11 @@ class LanguageConditionedEncoder(nn.Module):
         graph[('language', 'lang_to_gripper', 'gripper')].edge_attr = self.lang_edge_emb.expand(
             lang_gripper_edges.shape[1], -1)
 
+        lang_self_edges = self._language_self_edges(batch_size, device)
+        graph[('language', 'lang_self', 'language')].edge_index = lang_self_edges
+        graph[('language', 'lang_self', 'language')].edge_attr = self.lang_edge_emb.expand(
+            lang_self_edges.shape[1], -1)
+
         return graph
 
     def _rel_edge_attr(self, pos_src, pos_dst, edge_index):
@@ -135,3 +141,7 @@ class LanguageConditionedEncoder(nn.Module):
         src = torch.arange(batch_size, device=device).repeat_interleave(num_dst)
         dst = torch.arange(batch_size * num_dst, device=device) + dst_offset
         return torch.stack([src, dst], dim=0)
+
+    def _language_self_edges(self, batch_size, device):
+        idx = torch.arange(batch_size, device=device)
+        return torch.stack([idx, idx], dim=0)

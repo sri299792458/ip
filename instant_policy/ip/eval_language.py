@@ -79,6 +79,7 @@ def compute_language_bottleneck(model, lang_encoder, data, lang_emb):
     agi = model.model
     agi._ensure_scene_embeddings(data)
     agi._populate_action_scene_embeddings(data)
+    agi._ensure_diff_time(data)
     agi.graph.update_graph(data)
 
     with torch.no_grad():
@@ -96,9 +97,10 @@ def compute_language_bottleneck(model, lang_encoder, data, lang_emb):
     current_scene_x = x_dict['scene'][s_mask].view(1, agi.num_scenes_nodes, -1)
     current_scene_pos = agi.graph.graph['scene'].pos[s_mask].view(1, agi.num_scenes_nodes, 3)
 
-    return lang_encoder(current_scene_x, current_scene_pos,
-                        current_gripper_x, current_gripper_pos,
-                        lang_emb)
+    with torch.no_grad():
+        return lang_encoder(current_scene_x, current_scene_pos,
+                            current_gripper_x, current_gripper_pos,
+                            lang_emb)
 
 
 def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_base', max_execution_steps=30,
@@ -139,6 +141,7 @@ def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_ba
 
     # Dummy demos to satisfy data formatting (not used in language path).
     dummy_demo = None
+    num_demos = model.model.num_demos
     successes = []
     pbar = trange(num_rollouts, desc=f'Evaluating model, SR: 0/{num_rollouts}', leave=False)
     for i in pbar:
@@ -166,7 +169,7 @@ def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_ba
                 dummy_demo = {'obs': demo_obs, 'grips': demo_grip, 'T_w_es': demo_T}
 
             full_sample = {
-                'demos': [dummy_demo],
+                'demos': [dummy_demo for _ in range(num_demos)],
                 'live': {
                     'obs': [current_pcd],
                     'grips': [curr_obs.gripper_open],
@@ -237,13 +240,12 @@ def main():
     config = pickle.load(open(f'{args.model_path}/config.pkl', 'rb'))
     config['compile_models'] = False
     config['batch_size'] = 1
-    config['num_demos'] = 1
-    config['num_diffusion_iters_test'] = 4
+    config['num_diffusion_iters_test'] = 8
     config['device'] = args.device
 
     model = GraphDiffusion.load_from_checkpoint(f'{args.model_path}/model.pt', config=config, strict=True,
                                                 map_location=config['device']).to(config['device'])
-    model.model.reinit_graphs(1, num_demos=1)
+    model.model.reinit_graphs(1, num_demos=config['num_demos'])
     model.eval()
 
     if compile_models:

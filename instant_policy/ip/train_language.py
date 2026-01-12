@@ -38,6 +38,10 @@ def main():
     parser.add_argument('--save_every', type=int, default=5000, help='Checkpoint frequency')
     parser.add_argument('--save_dir', type=str, default='./runs_lang', help='Save directory')
     parser.add_argument('--device', type=str, default='cuda', help='Device to run on')
+    parser.add_argument('--use_wandb', type=int, default=0, help='Enable Weights & Biases logging [0,1]')
+    parser.add_argument('--wandb_project', type=str, default='Instant Policy', help='W&B project name')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='W&B entity (optional)')
+    parser.add_argument('--wandb_run_name', type=str, default='lang_train', help='W&B run name')
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -66,6 +70,25 @@ def main():
     optimizer = torch.optim.AdamW(lang_encoder.parameters(),
                                   lr=model_config['lang_lr'],
                                   weight_decay=model_config['lang_weight_decay'])
+
+    use_wandb = bool(args.use_wandb)
+    if use_wandb:
+        try:
+            import wandb
+        except ImportError as exc:
+            raise ImportError('wandb is required when --use_wandb=1') from exc
+        wandb.init(project=args.wandb_project,
+                   entity=args.wandb_entity,
+                   name=args.wandb_run_name,
+                   config={
+                       'batch_size': args.batch_size,
+                       'max_steps': args.max_steps,
+                       'lang_lr': model_config['lang_lr'],
+                       'lang_weight_decay': model_config['lang_weight_decay'],
+                       'contrastive_temperature': model_config['contrastive_temperature'],
+                       'contrastive_weight': model_config['contrastive_weight'],
+                       'l2_weight': model_config['l2_weight'],
+                   })
 
     dset = RunningDataset(args.data_path_train, len(os.listdir(args.data_path_train)),
                           rand_g_prob=0.0, require_lang=True)
@@ -113,7 +136,7 @@ def main():
 
             lang_bottleneck = lang_encoder(current_scene_x, current_scene_pos,
                                            current_gripper_x, current_gripper_pos,
-                                           data.lang_emb)
+                                           data.lang_emb.view(batch_size, -1))
 
             contrastive = info_nce_loss(lang_bottleneck, demo_bottleneck,
                                         model_config['contrastive_temperature'])
@@ -134,6 +157,13 @@ def main():
                     ).mean().item()
                 print(f'step {global_step} loss {loss.item():.4f} '
                       f'contrastive {contrastive.item():.4f} l2 {l2_loss.item():.4f} sim {sim:.3f}')
+                if use_wandb:
+                    wandb.log({
+                        'loss': loss.item(),
+                        'contrastive': contrastive.item(),
+                        'l2_loss': l2_loss.item(),
+                        'sim': sim,
+                    }, step=global_step)
 
             if global_step % args.save_every == 0 and global_step > 0:
                 ckpt_path = os.path.join(args.save_dir, f'lang_encoder_{global_step}.pt')
@@ -175,7 +205,7 @@ def main():
 
                     lang_bottleneck = lang_encoder(current_scene_x, current_scene_pos,
                                                    current_gripper_x, current_gripper_pos,
-                                                   data.lang_emb)
+                                                   data.lang_emb.view(batch_size, -1))
                     sim = F.cosine_similarity(
                         lang_bottleneck.reshape(batch_size, -1),
                         demo_bottleneck.reshape(batch_size, -1),
@@ -184,10 +214,14 @@ def main():
                     sims.append(sim.mean().item())
 
             print(f'val sim {sum(sims) / len(sims):.3f}')
+            if use_wandb:
+                wandb.log({'val_sim': sum(sims) / len(sims)}, step=global_step)
             lang_encoder.train()
 
     ckpt_path = os.path.join(args.save_dir, 'lang_encoder_last.pt')
     torch.save(lang_encoder.state_dict(), ckpt_path)
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == '__main__':

@@ -156,6 +156,7 @@ class AGI(torch.nn.Module):
         self._ensure_scene_embeddings(data)
         self._populate_action_scene_embeddings(data)
         ################################################################################################################
+        self._ensure_diff_time(data)
         self.graph.update_graph(data)
 
         # TODO: This can cause problems for some GPU types when compiling, but it is needed for other types of GPUs.
@@ -193,6 +194,7 @@ class AGI(torch.nn.Module):
         with torch.no_grad():
             self._ensure_scene_embeddings(data)
             self._populate_action_scene_embeddings(data)
+            self._ensure_diff_time(data)
             self.graph.update_graph(data)
 
             x_dict = self.local_encoder(self.graph.graph.x_dict,
@@ -216,11 +218,15 @@ class AGI(torch.nn.Module):
 
         self._ensure_scene_embeddings(data)
         self._populate_action_scene_embeddings(data)
+        self._ensure_diff_time(data)
         self.graph.update_graph(data)
 
         x_dict = self.local_encoder(self.graph.graph.x_dict,
                                     self.graph.graph.edge_index_dict,
                                     self.graph.graph.edge_attr_dict)
+        x_dict = self.cond_encoder(x_dict,
+                                   self.graph.graph.edge_index_dict,
+                                   self.graph.graph.edge_attr_dict)
 
         current_mask = self._get_current_gripper_mask()
         x_dict['gripper'][current_mask] = bottleneck.view(-1, bottleneck.shape[-1])
@@ -300,3 +306,10 @@ class AGI(torch.nn.Module):
         data.action_scene_node_embds = action_scene_node_embds.view(self.batch_size, self.pred_horizon,
                                                                     -1, self.local_embd_dim)
         data.action_scene_node_pos = action_scene_node_pos.view(self.batch_size, self.pred_horizon, -1, 3)
+
+    def _ensure_diff_time(self, data):
+        if not hasattr(data, 'diff_time'):
+            batch_size = data.actions.shape[0]
+            data.diff_time = torch.zeros((batch_size, 1),
+                                         device=data.actions.device,
+                                         dtype=data.actions.dtype)
