@@ -7,8 +7,8 @@ import torch
 from ip.deployment.config import DeploymentConfig
 from ip.deployment.control.action_executor import ActionExecutor
 from ip.deployment.control.ur_rtde_control import URRTDEControl
+from ip.deployment.perception.realsense_perception import RealSensePerception
 from ip.deployment.perception.sam_segmentation import build_segmenter
-from ip.deployment.perception.zeus_perception import ZeusPerception
 from ip.deployment.state.ur_rtde_state import URRTDEState
 from ip.deployment.ur.robotiq_gripper import RobotiqGripper
 from ip.models.diffusion import GraphDiffusion
@@ -40,7 +40,7 @@ class InstantPolicyDeployment:
                 device=config.device,
                 num_cameras=len(config.camera_configs),
             )
-            self.perception = ZeusPerception(
+            self.perception = RealSensePerception(
                 config.camera_configs,
                 segmenter=segmenter,
                 voxel_size=config.pcd_voxel_size,

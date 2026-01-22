@@ -2,31 +2,29 @@ Instant Policy Deployment (UR5e RTDE + RealSense + XMem++)
 ==========================================================
 
 This document explains the deployment code from first principles. It starts by
-defining what Instant Policy requires at test time, then explains why we avoid
-the ROS-based lab stacks (Zeus, camera-utils) on Ubuntu 25, and how the current
-deployment implements the same data contract using RTDE, a direct Robotiq socket
-driver, and RealSense capture without ROS. Every coordinate frame, tensor
-shape, transform, and policy decision is spelled out.
+defining what Instant Policy requires at test time, then describes the ROS-free
+stack used here (RTDE control, Robotiq socket driver, RealSense capture, and
+XMem++ + SAM segmentation). Every coordinate frame, tensor shape, transform,
+and policy decision is spelled out.
 
 Table of contents
 -----------------
 1. First principles: the Instant Policy test-time contract
-2. Zeus and camera-utils context (and why we bypass them here)
-3. RTDE + Robotiq stack used by this deployment
-4. Data contract and sample structure
-5. Coordinate frames and transforms
-6. Perception pipeline (capture -> mask -> point cloud -> fuse)
-7. Segmentation: XMem++ tracking and SAM seeding
-8. State estimation and gripper mapping
-9. Control and safety gating
-10. Demo collection and conversion
-11. Model inference loop and execution policy
-12. Initialization and runtime sequence diagram
-13. Shapes, units, and normalization
-14. Configuration reference
-15. Setup and run instructions
-16. Debug checklist and failure modes
-17. File map
+2. ROS-free stack: RTDE + Robotiq + RealSense
+3. Data contract and sample structure
+4. Coordinate frames and transforms
+5. Perception pipeline (capture -> mask -> point cloud -> fuse)
+6. Segmentation: XMem++ tracking and SAM seeding
+7. State estimation and gripper mapping
+8. Control and safety gating
+9. Demo collection and conversion
+10. Model inference loop and execution policy
+11. Initialization and runtime sequence diagram
+12. Shapes, units, and normalization
+13. Configuration reference
+14. Setup and run instructions
+15. Debug checklist and failure modes
+16. File map
 
 
 1. First principles: the Instant Policy test-time contract
@@ -69,38 +67,9 @@ Context consists of N demos, each downsampled to L waypoints:
 The deployment code enforces these constraints wherever possible.
 
 
-2. Zeus and camera-utils context (and why we bypass them here)
---------------------------------------------------------------
-The lab already has two ROS-based stacks:
-
-Zeus (zeus-master):
-- MoveIt + ROS state and control for UR5e.
-- Robotiq integration via ROS topics.
-
-camera-utils:
-- ROS tools for RGB-D capture and registered depth.
-
-Why we do not use them here:
-- Ubuntu 25 does not support ROS1 Noetic.
-- The ROS-based stacks import rospy at module import time, which fails without
-  a full ROS1 install.
-
-What we keep from those stacks:
-- The conceptual data flow (depth -> XYZ via intrinsics -> world frame).
-- The same RealSense intrinsics math (fx, fy, ppx, ppy).
-- The same gripper mapping: 0 closed, 1 open.
-
-What we replace:
-- MoveIt state/control -> ur_rtde (RTDE) state/control.
-- ROS gripper feedback -> direct Robotiq socket driver.
-- ROS camera tools -> direct pyrealsense2 capture + local intrinsics helpers.
-
-This keeps the Instant Policy data contract identical while removing ROS.
-
-
-3. RTDE + Robotiq stack used by this deployment
-------------------------------------------------
-We use three low-level building blocks:
+2. ROS-free stack: RTDE + Robotiq + RealSense
+---------------------------------------------
+This deployment avoids ROS and MoveIt. It uses:
 
 1) ur_rtde
    - `rtde_receive.RTDEReceiveInterface` for state (TCP pose).
@@ -118,21 +87,21 @@ These are wrapped by:
 - `state/ur_rtde_state.py`
 - `control/ur_rtde_control.py`
 - `ur/robotiq_gripper.py`
-- `perception/zeus_perception.py` (name kept, but it is ROS-free)
+- `perception/realsense_perception.py`
 
 
-4. Data contract and sample structure
+3. Data contract and sample structure
 -------------------------------------
 We keep the model data format identical to the original Instant Policy code.
 
-4.1 Raw demo format (input)
+3.1 Raw demo format (input)
 `demo = { "pcds": [], "T_w_es": [], "grips": [] }`
 
 - `pcds[i]`: [Ni, 3] point cloud in world frame, meters.
 - `T_w_es[i]`: [4, 4] EE pose in world frame.
 - `grips[i]`: gripper state in {0, 1}.
 
-4.2 Condensed demo format (model context)
+3.2 Condensed demo format (model context)
 `sample_to_cond_demo(demo, num_traj_wp=10)` produces:
 
 - `obs`: list of length L (L=10).
@@ -144,7 +113,7 @@ The conversion:
 - Selects waypoints based on motion and gripper changes.
 - Converts each pcd to EE frame at that waypoint.
 
-4.3 Live sample format (model input at runtime)
+3.3 Live sample format (model input at runtime)
 We build `full_sample`:
 - `full_sample["demos"] = list of condensed demos`
 - `full_sample["live"]` contains:
@@ -157,7 +126,7 @@ We build `full_sample`:
 `save_sample(full_sample, None)` converts this into a graph input for the model.
 
 
-5. Coordinate frames and transforms
+4. Coordinate frames and transforms
 -----------------------------------
 We use three frames:
 - W: world/base frame (UR base frame from RTDE).
@@ -168,7 +137,7 @@ Transforms:
 - `T_w_e`: transform from E to W.
 - `T_world_camera`: transform from C to W.
 
-5.1 Point cloud transforms
+4.1 Point cloud transforms
 Depth -> camera XYZ:
   xyz_c = _get_xyz(depth_m, K)
 
@@ -178,59 +147,59 @@ Camera -> world:
 World -> EE:
   xyz_e = inv(T_w_e) * xyz_w
 
-5.2 Action composition
+4.2 Action composition
 Actions are relative to the pose at inference time (T_w_e_initial):
   T_w_e_target_j = T_w_e_initial @ actions[j]
 When executing sequentially, you move from target j-1 to target j, so the
 per-step delta is the difference between these consecutive targets.
 
-5.3 Units
+4.3 Units
 - Distances: meters.
 - Rotation: radians internally, degrees only for documentation.
 - Depth scale: meters per depth unit from RealSense.
 
 
-6. Perception pipeline (capture -> mask -> point cloud -> fuse)
+5. Perception pipeline (capture -> mask -> point cloud -> fuse)
 ---------------------------------------------------------------
-Implemented in `perception/zeus_perception.py` (ROS-free).
+Implemented in `perception/realsense_perception.py`.
 
-6.1 Capture
+5.1 Capture
 For each camera:
 - Start a RealSense pipeline with color + depth.
 - Optionally align depth to color (`rs.align`).
 - Extract color and depth arrays.
 - Convert depth to meters using the device depth scale.
 
-6.2 Intrinsics (no ROS)
+5.2 Intrinsics
 We compute K directly from the stream profile intrinsics:
 - fx, fy, ppx, ppy -> 3x3 K.
 
-6.3 Masking
+5.3 Masking
 If segmentation is enabled:
 - Obtain a binary mask (0/1).
 - Multiply depth by mask.
 - If mask shape does not match depth, ignore it.
 
-6.4 Back-projection
+5.4 Back-projection
 - Use `_get_xyz(depth_m, K)` to compute XYZ in camera frame.
 - Filter invalid points:
   - finite coordinates
   - z > 0
 
-6.5 Transform to world
+5.5 Transform to world
 - Apply `T_world_camera` to each point.
 
-6.6 Fuse
+5.6 Fuse
 - Concatenate all camera clouds.
 - Optional voxel downsample.
 - Later, subsample to 2048 points for the model.
 
 
-7. Segmentation: XMem++ tracking and SAM seeding
+6. Segmentation: XMem++ tracking and SAM seeding
 ------------------------------------------------
 We follow the paper: SAM seeds a tracker, then tracking runs each frame.
 
-7.1 XMem++ in-process (recommended)
+6.1 XMem++ in-process (recommended)
 Implemented in `perception/xmem_segmentation.py` as `XMemOnlineSegmenter`.
 
 Initialization per camera:
@@ -248,25 +217,25 @@ Assumptions:
 - CUDA is required, and this integration expects `cuda:0`.
 - SAM checkpoint is required unless external masks are provided.
 
-7.2 XMem++ via external masks
-`XMemMaskSubscriber` can subscribe to external mask topics, but it is ROS-based
-and not used in the ROS-free deployment.
+6.2 External masks
+`XMemMaskSubscriber` can subscribe to external mask streams if you already
+run a separate segmentation process. This path requires ROS and is optional.
 
-7.3 Why SAM is required by default
+6.3 Why SAM is required by default
 XMem++ must be seeded with an initial mask. The paper seeds with SAM.
 If no external masks are provided, we require SAM weights.
 
 
-8. State estimation and gripper mapping
+7. State estimation and gripper mapping
 ---------------------------------------
 Implemented in `state/ur_rtde_state.py`.
 
-8.1 End-effector pose
+7.1 End-effector pose
 - `pose = rtde_receive.getActualTCPPose()` returns [x, y, z, rx, ry, rz].
 - rx, ry, rz is axis-angle (rotation vector).
 - `T_w_e` is built from position + Rotation.from_rotvec.
 
-8.2 Gripper state
+7.2 Gripper state
 - `RobotiqGripper.get_position()` returns 0..255.
 - Normalize to [0, 1] using configured open/closed positions.
 - The live loop thresholds to {0, 1} for the model.
@@ -276,11 +245,11 @@ Why direct socket:
 - The Robotiq socket protocol is low-latency and reliable.
 
 
-9. Control and safety gating
+8. Control and safety gating
 ----------------------------
 Implemented in `control/ur_rtde_control.py` and `control/action_executor.py`.
 
-9.1 Control (RTDE)
+8.1 Control (RTDE)
 - Convert target 4x4 to UR pose [x, y, z, rx, ry, rz].
 - Execute with `moveL` or `servoL`, based on config.
 
@@ -288,7 +257,7 @@ Notes:
 - `moveL` is blocking but simple and robust.
 - `servoL` supports streaming; we send one 0.1 s step per action.
 
-9.2 Safety gating
+8.2 Safety gating
 We enforce:
 - Workspace bounds.
 - Per-step translation <= 1 cm.
@@ -301,7 +270,7 @@ Per-step vs horizon:
 - Over 8 steps, total displacement can accumulate.
 
 
-10. Demo collection and conversion
+9. Demo collection and conversion
 ----------------------------------
 Implemented in `demo/demo_collector.py`.
 
@@ -323,20 +292,20 @@ Why 10 Hz:
 - Balances segmentation cost and trajectory density.
 
 
-11. Model inference loop and execution policy
+10. Model inference loop and execution policy
 ---------------------------------------------
 Implemented in `orchestrator.py`.
 
-11.1 Load model
+10.1 Load model
 - Load `GraphDiffusion` checkpoint.
 - Set `num_demos`, `num_diffusion_iters`, batch_size=1.
 - Reinitialize graphs.
 
-11.2 Prepare demos
+10.2 Prepare demos
 - Convert raw demos with `sample_to_cond_demo`.
 - If fewer demos than required, duplicate the last demo.
 
-11.3 Per-step loop
+10.3 Per-step loop
 1) Capture state: `T_w_e`, `grip`.
 2) Capture perception: `pcd_w`.
 3) Convert to EE frame and subsample to 2048 points.
@@ -347,12 +316,12 @@ Implemented in `orchestrator.py`.
 8) Execute actions until gripper state changes (paper recommendation).
    Each target is computed as T_w_e_initial @ actions[j].
 
-11.4 Gripper command mapping
+10.4 Gripper command mapping
 Model outputs in {-1, 1}:
   command = (grip + 1) / 2
 
 
-12. Initialization and runtime sequence diagram
+11. Initialization and runtime sequence diagram
 ------------------------------------------------
 Initialization:
 1) Build DeploymentConfig.
@@ -384,7 +353,7 @@ Runtime loop (single iteration):
              safety gate -> RTDE execute
 
 
-13. Shapes, units, and normalization
+12. Shapes, units, and normalization
 ------------------------------------
 Key tensors (typical shapes):
 - `pcd_w`: [N, 3], float32, meters (world frame)
@@ -399,7 +368,7 @@ Normalization in `save_sample`:
 - Point clouds are NOT normalized; they are fed in meters.
 
 
-14. Configuration reference
+13. Configuration reference
 ---------------------------
 See `config.py`.
 
@@ -415,7 +384,7 @@ SegmentationConfig:
 - `sam_checkpoint_path`: SAM weights (required to seed XMem++).
 - `xmem_checkpoint_path`: XMem++ weights (required for XMem++).
 - `xmem_init_with_sam`: seed XMem++ with SAM.
-- `mask_topics`: optional external masks (ROS-based).
+- `mask_topics`: optional external masks.
 - `mask_threshold`: threshold for float masks.
 - `points_per_side`, `pred_iou_thresh`, etc: SAM parameters.
 
@@ -443,7 +412,7 @@ DeploymentConfig:
 - `execute_until_grip_change`: True by default.
 
 
-15. Setup and run instructions
+14. Setup and run instructions
 ------------------------------
 1) Prepare calibration:
    - Obtain `T_world_camera` for each RealSense.
@@ -462,7 +431,7 @@ DeploymentConfig:
    - `python -m ip.deployment --demo demo.pkl`
 
 
-16. Debug checklist and failure modes
+15. Debug checklist and failure modes
 -------------------------------------
 Common failure modes:
 
@@ -491,12 +460,12 @@ Sanity checks:
 - Confirm gripper returns a stable position.
 
 
-17. File map
+16. File map
 ------------
 - `instant_policy/ip/deployment.py`: entrypoint.
 - `instant_policy/ip/deployment/orchestrator.py`: main loop.
 - `instant_policy/ip/deployment/config.py`: config dataclasses.
-- `instant_policy/ip/deployment/perception/zeus_perception.py`: RealSense capture.
+- `instant_policy/ip/deployment/perception/realsense_perception.py`: RealSense capture.
 - `instant_policy/ip/deployment/perception/sam_segmentation.py`: SAM wrapper.
 - `instant_policy/ip/deployment/perception/xmem_segmentation.py`: XMem++.
 - `instant_policy/ip/deployment/state/ur_rtde_state.py`: RTDE state.

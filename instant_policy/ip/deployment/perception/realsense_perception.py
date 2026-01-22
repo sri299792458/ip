@@ -52,7 +52,7 @@ class _CameraHandle:
     T_world_camera: np.ndarray
 
 
-class ZeusPerception:
+class RealSensePerception:
     def __init__(
         self,
         camera_configs: Iterable,
