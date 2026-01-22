@@ -6,11 +6,11 @@ import torch
 
 from ip.deployment.config import DeploymentConfig
 from ip.deployment.control.action_executor import ActionExecutor
-from ip.deployment.control.zeus_control import ZeusControl
+from ip.deployment.control.ur_rtde_control import URRTDEControl
 from ip.deployment.perception.sam_segmentation import build_segmenter
 from ip.deployment.perception.zeus_perception import ZeusPerception
-from ip.deployment.state.zeus_state import ZeusState
-from ip.deployment.zeus_env import ensure_zeus_on_path
+from ip.deployment.state.ur_rtde_state import URRTDEState
+from ip.deployment.ur.robotiq_gripper import RobotiqGripper
 from ip.models.diffusion import GraphDiffusion
 from ip.utils.common_utils import transform_pcd
 from ip.utils.data_proc import sample_to_cond_demo, save_sample, subsample_pcd
@@ -20,7 +20,9 @@ class InstantPolicyDeployment:
     def __init__(
         self,
         config: DeploymentConfig,
-        move_group=None,
+        rtde_control=None,
+        rtde_receive=None,
+        gripper=None,
         perception=None,
         state=None,
         control=None,
@@ -45,15 +47,29 @@ class InstantPolicyDeployment:
             )
 
         if self.state is None or self.control is None:
-            if move_group is None:
-                ensure_zeus_on_path()
-                from common.move_group_interface import MoveGroupInterface
-                enable_right = config.arm != "lightning"
-                move_group = MoveGroupInterface(enable_right=enable_right)
+            if gripper is None and config.gripper.enable:
+                host = config.gripper.host or config.robot_ip
+                gripper = RobotiqGripper(
+                    host=host,
+                    port=config.gripper.port,
+                    open_position=config.gripper.open_position,
+                    closed_position=config.gripper.closed_position,
+                )
+                gripper.connect()
+                gripper.activate()
+            if rtde_control is None:
+                rtde_control = URRTDEControl.connect(config.robot_ip, config.rtde)
+            if rtde_receive is None:
+                rtde_receive = URRTDEState.connect(config.robot_ip)
             if self.state is None:
-                self.state = ZeusState(move_group, arm=config.arm)
+                self.state = URRTDEState(rtde_receive, gripper=gripper)
             if self.control is None:
-                self.control = ZeusControl(move_group, arm=config.arm)
+                self.control = URRTDEControl(
+                    rtde_control,
+                    control_config=config.rtde,
+                    gripper=gripper,
+                    gripper_config=config.gripper,
+                )
 
         self.executor = ActionExecutor(self.control, self.state, config.safety)
         self.model, self.model_config = self._load_model(

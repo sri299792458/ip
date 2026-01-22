@@ -18,11 +18,29 @@ else:
     _RS_IMPORT_ERROR = None
 
 from ip.deployment.perception.sam_segmentation import SAMSegmenter
-from ip.deployment.zeus_env import ensure_zeus_on_path
 
-ensure_zeus_on_path()
-from common.ros_pointcloud import _get_xyz
-from perception.scripts.publish_d405 import get_intrinsics, get_K
+
+def _get_xyz(depth_m: np.ndarray, K: np.ndarray) -> np.ndarray:
+    h, w = depth_m.shape
+    vu = np.mgrid[:h, :w]
+    ones = np.ones((1, h, w), dtype=depth_m.dtype)
+    uv1 = np.concatenate([vu[[1]], vu[[0]], ones], axis=0)
+    uv1_prime = uv1 * depth_m
+    return np.linalg.inv(K) @ uv1_prime.reshape(3, -1)
+
+
+def _get_intrinsics(stream_profile: "rs.stream_profile"):
+    prof = rs.video_stream_profile(stream_profile)
+    return prof.get_intrinsics()
+
+
+def _get_K(intrinsics) -> np.ndarray:
+    K = np.eye(3)
+    K[0, 0] = intrinsics.fx
+    K[1, 1] = intrinsics.fy
+    K[0, 2] = intrinsics.ppx
+    K[1, 2] = intrinsics.ppy
+    return K
 
 
 @dataclass
@@ -60,12 +78,12 @@ class ZeusPerception:
             if cam.align_to_color:
                 align = rs.align(rs.stream.color)
                 color_profile = profile.get_stream(rs.stream.color)
-                intr = get_intrinsics(color_profile)
+                intr = _get_intrinsics(color_profile)
             else:
                 align = None
                 depth_profile = profile.get_stream(rs.stream.depth)
-                intr = get_intrinsics(depth_profile)
-            K = get_K(intr)
+                intr = _get_intrinsics(depth_profile)
+            K = _get_K(intr)
 
             self._cameras.append(
                 _CameraHandle(

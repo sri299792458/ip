@@ -1,5 +1,5 @@
 """
-Example deployment entrypoint for Instant Policy on Zeus (UR5e).
+Example deployment entrypoint for Instant Policy on UR5e (RTDE, ROS-free).
 """
 import argparse
 import pickle
@@ -17,11 +17,10 @@ def _build_default_config() -> DeploymentConfig:
         CameraConfig(serial="CAMERA_SERIAL_2", T_world_camera=np.eye(4)),
     ]
     config = DeploymentConfig(camera_configs=camera_configs)
-    # Example XMem++ config (SAM seeding is required unless you use mask_topics):
-    # config.segmentation.enable = True
-    # config.segmentation.backend = "xmem"
-    # config.segmentation.xmem_checkpoint_path = "../XMem2-main/saves/XMem.pth"
-    # config.segmentation.sam_checkpoint_path = "../path/to/sam_vit_b.pth"
+    config.segmentation.enable = True
+    config.segmentation.backend = "xmem"
+    config.segmentation.xmem_checkpoint_path = "../XMem2-main/saves/XMem.pth"
+    config.segmentation.sam_checkpoint_path = "../path/to/sam_vit_b.pth"
     return config
 
 
@@ -34,7 +33,8 @@ def _load_demos(paths):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Instant Policy deployment on Zeus")
+    parser = argparse.ArgumentParser(description="Instant Policy deployment on UR5e (RTDE)")
+    parser.add_argument("--robot-ip", default=None, help="UR5e IP address (default: config.robot_ip)")
     parser.add_argument("--demo", action="append", default=[], help="Path to a demo pickle file")
     parser.add_argument("--collect-demo", action="store_true", help="Collect a kinesthetic demo and exit")
     parser.add_argument("--demo-out", default="demo.pkl", help="Output path for collected demo")
@@ -43,6 +43,8 @@ def main():
     args = parser.parse_args()
 
     config = _build_default_config()
+    if args.robot_ip:
+        config.robot_ip = args.robot_ip
     if any(cfg.serial.startswith("CAMERA_SERIAL") for cfg in config.camera_configs):
         raise ValueError("Please update camera serials and T_world_camera in deployment.py")
 

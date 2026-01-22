@@ -37,8 +37,33 @@ class SegmentationConfig:
 
 
 @dataclass
+class GripperConfig:
+    enable: bool = True
+    host: Optional[str] = None
+    port: int = 63352
+    open_position: int = 0
+    closed_position: int = 255
+    speed: int = 255
+    force: int = 100
+
+
+@dataclass
+class RTDEControlConfig:
+    frequency_hz: int = 500
+    control_mode: str = "moveL"  # moveL or servoL
+    move_speed: float = 0.1
+    move_acceleration: float = 0.5
+    servo_speed: float = 0.1
+    servo_acceleration: float = 0.5
+    servo_time: float = 0.1
+    servo_lookahead: float = 0.1
+    servo_gain: int = 300
+
+
+@dataclass
 class DeploymentConfig:
     camera_configs: List[CameraConfig] = field(default_factory=list)
+    robot_ip: str = "192.168.1.102"
     model_path: str = "./checkpoints"
     num_demos: int = 2
     num_traj_wp: int = 10
@@ -48,6 +73,7 @@ class DeploymentConfig:
     pcd_voxel_size: Optional[float] = None
     safety: Optional[SafetyLimits] = None
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
-    arm: str = "lightning"
+    rtde: RTDEControlConfig = field(default_factory=RTDEControlConfig)
+    gripper: GripperConfig = field(default_factory=GripperConfig)
     device: Optional[str] = None
     execute_until_grip_change: bool = True

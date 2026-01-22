@@ -1,34 +1,29 @@
-# Instant Policy Deployment Guide (ROS + Zeus)
+# Instant Policy Deployment Guide (RTDE, no ROS)
 
-Complete deployment instructions for a lab computer running Ubuntu 20.04 with ROS Noetic and UR5e robots.
+Complete deployment instructions for a lab computer running Ubuntu 25 with a UR5e.
 
 ---
 
 ## Prerequisites
 
-- **OS**: Ubuntu 20.04 LTS (required for ROS Noetic)
-- **GPU**: NVIDIA GPU with CUDA 11.8 support
+- **OS**: Ubuntu 25 (ROS1 Noetic not required)
+- **GPU**: NVIDIA GPU with CUDA support
 - **Robot**: UR5e with Robotiq 2F-85 gripper
-- **Cameras**: Intel RealSense D415/D435
-- **ROS**: Noetic with MoveIt installed
+- **Cameras**: Intel RealSense D405/D435 or D415
+- **Network**: PC and robot on same subnet
 
 ---
 
-## 1. Install System Dependencies
+## 1. System Dependencies
 
 ```bash
-# NVIDIA Driver + CUDA 11.8
 sudo apt update
-sudo apt install -y nvidia-driver-535 nvidia-cuda-toolkit
+sudo apt install -y build-essential python3-dev
+```
 
-# ROS Noetic dependencies
-sudo apt install -y python3-rosdep python3-rosinstall python3-rosinstall-generator \
-    python3-wstool build-essential python3-catkin-tools
+### RealSense SDK (librealsense)
 
-# RealSense SDK
-sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key F6E65AC044F831AC80A06380C8B3A55A6F3EFCDE
-sudo add-apt-repository "deb https://librealsense.intel.com/Debian/apt-repo $(lsb_release -cs) main"
-sudo apt update
+```bash
 sudo apt install -y librealsense2-dkms librealsense2-utils librealsense2-dev
 ```
 
@@ -52,10 +47,13 @@ pip install -e .
 
 ---
 
-## 3. Install Deployment-Specific Dependencies
+## 3. Install Deployment Dependencies
 
 ```bash
 conda activate ip_env
+
+# UR RTDE
+pip install ur_rtde
 
 # RealSense Python bindings
 pip install pyrealsense2
@@ -104,31 +102,12 @@ gdown 1QoChoCkFWMl93k0MknLcCEJMLQnCNhSm -O saves/XMem.pth
 
 ---
 
-## 5. ROS + Zeus Setup
+## 5. Robot Setup (UR5e)
 
-### 5.1 Build Zeus Workspace
-
-```bash
-# Source ROS
-source /opt/ros/noetic/setup.bash
-
-# Build zeus-master as a catkin workspace
-cd ~/Desktop/ip/zeus-master
-catkin_make
-
-# Source the workspace
-source devel/setup.bash
-```
-
-### 5.2 Configure ROS Environment
-
-Add to `~/.bashrc`:
-
-```bash
-source /opt/ros/noetic/setup.bash
-source ~/Desktop/ip/zeus-master/devel/setup.bash
-export ROS_MASTER_URI=http://localhost:11311
-```
+- Set the robot to **Remote Control** mode.
+- Confirm RTDE is enabled on the UR controller.
+- Verify the robot IP (default often `192.168.1.102`).
+- Ensure the Robotiq gripper is connected (port 63352).
 
 ---
 
@@ -144,18 +123,18 @@ rs-enumerate-devices | grep Serial
 
 ### 6.2 Calibration Options
 
-1. Hand-eye calibration with AprilTags.
-2. MoveIt calibration using `moveit_calibration` package.
-3. Manual measurement for coarse setups.
+1. AprilTag or ArUco calibration (recommended).
+2. Hand-eye calibration (easy_handeye or equivalent).
+3. Manual measurement (only for coarse setups).
 
 The transform `T_world_camera` must be a 4x4 matrix that transforms points from
-camera frame to MoveIt world frame.
+camera frame to the UR base frame.
 
 ---
 
 ## 7. Configure Deployment
 
-Edit `ip/deployment.py`:
+Edit `instant_policy/ip/deployment.py`:
 
 ```python
 def _build_default_config() -> DeploymentConfig:
@@ -167,57 +146,38 @@ def _build_default_config() -> DeploymentConfig:
                 [0, 1, 0, 0.0],
                 [0, 0, 1, 0.7],
                 [0, 0, 0, 1.0]
-            ])
+            ]),
         ),
         CameraConfig(
             serial="ACTUAL_SERIAL_2",
-            T_world_camera=np.array([...])
+            T_world_camera=np.array([...]),
         ),
     ]
 
     config = DeploymentConfig(camera_configs=camera_configs)
     config.model_path = "./checkpoints"
+    config.robot_ip = "192.168.1.102"
 
-    # Enable XMem++ segmentation
+    # Enable XMem++ segmentation (SAM seeding required)
     config.segmentation.enable = True
     config.segmentation.backend = "xmem"
     config.segmentation.xmem_checkpoint_path = "../XMem2-main/saves/XMem.pth"
     config.segmentation.sam_checkpoint_path = "./weights/sam_vit_b_01ec64.pth"
 
-    # Arm selection: "lightning" (left) or "thunder" (right)
-    config.arm = "lightning"
     return config
 ```
 
 ---
 
-## 8. Launch Procedure
+## 8. Run Deployment
 
-### Terminal 1: ROS Core + MoveIt
-
-```bash
-roscore
-```
-
-### Terminal 2: Zeus bringup
-
-```bash
-cd ~/Desktop/ip/zeus-master
-source devel/setup.bash
-roslaunch zeus_bringup ur5e.launch
-```
-
----
-
-## 9. Run Deployment
-
-### 9.1 Collect a Demo
+### 8.1 Collect a Demo
 
 ```bash
 python -m ip.deployment --collect-demo --demo-out demo.pkl
 ```
 
-### 9.2 Run Inference
+### 8.2 Run Inference
 
 ```bash
 python -m ip.deployment --demo demo.pkl
@@ -225,16 +185,17 @@ python -m ip.deployment --demo demo.pkl
 
 ---
 
-## 10. Troubleshooting
+## 9. Troubleshooting
 
 Common issues:
 
-1) **MoveIt planning fails**
-   - Verify MoveIt is receiving robot state.
-   - Check collisions in the planning scene.
+1) **RTDE connection failure**
+   - Check robot IP and network.
+   - Ensure the robot is in Remote Control mode.
 
-2) **Gripper state missing**
-   - Ensure Robotiq driver is publishing `Robotiq2FGripperRobotInput`.
+2) **Robotiq connection failure**
+   - Verify port 63352 is reachable.
+   - Ensure gripper is powered and enabled.
 
 3) **Empty point cloud**
    - Check camera serials and USB3 connection.

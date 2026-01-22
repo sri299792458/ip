@@ -1,17 +1,18 @@
-Instant Policy Deployment (Zeus + RealSense + XMem++)
-=====================================================
+Instant Policy Deployment (UR5e RTDE + RealSense + XMem++)
+==========================================================
 
 This document explains the deployment code from first principles. It starts by
-defining what Instant Policy requires at test time, enumerates what Zeus and
-camera-utils already provide, and then shows exactly how the deployment code
-bridges the gaps. Nothing is assumed: every coordinate frame, tensor shape,
-transform, and policy decision is spelled out.
+defining what Instant Policy requires at test time, then explains why we avoid
+the ROS-based lab stacks (Zeus, camera-utils) on Ubuntu 25, and how the current
+deployment implements the same data contract using RTDE, a direct Robotiq socket
+driver, and RealSense capture without ROS. Every coordinate frame, tensor
+shape, transform, and policy decision is spelled out.
 
 Table of contents
 -----------------
 1. First principles: the Instant Policy test-time contract
-2. What Zeus already provides (and how we use it)
-3. What camera-utils already provides (and how we use it)
+2. Zeus and camera-utils context (and why we bypass them here)
+3. RTDE + Robotiq stack used by this deployment
 4. Data contract and sample structure
 5. Coordinate frames and transforms
 6. Perception pipeline (capture -> mask -> point cloud -> fuse)
@@ -50,8 +51,7 @@ Context consists of N demos, each downsampled to L waypoints:
 1.3 Action outputs
 - A sequence of relative SE(3) transforms, actions[j], each in EE frame.
   Each actions[j] represents the transform from the current pose at inference
-  time to the future pose at step j (i.e., cumulative relative to the initial
-  pose for that inference step).
+  time to the future pose at step j (cumulative relative to the initial pose).
 - A sequence of gripper commands, grips[j], in {-1, 1}.
 
 1.4 Critical rules (must be correct)
@@ -69,65 +69,56 @@ Context consists of N demos, each downsampled to L waypoints:
 The deployment code enforces these constraints wherever possible.
 
 
-2. What Zeus already provides (and how we use it)
--------------------------------------------------
-Zeus is the lab's UR5e stack (zeus-master). It already provides reliable ROS,
-MoveIt, and Robotiq integration. We reuse it instead of re-implementing robot
-control. This keeps safety behavior consistent with the lab stack.
+2. Zeus and camera-utils context (and why we bypass them here)
+--------------------------------------------------------------
+The lab already has two ROS-based stacks:
 
-2.1 Relevant Zeus modules
-- `zeus-master/common/move_group_interface.py`
-  - `pose_from_transform(T)` -> ROS Pose
-  - `transform_from_pose(pose)` -> 4x4 matrix
-  - `plan_cartesian_path(waypoints, move_group)`
-  - `execute_plan(plan, move_group)`
-  - `open_gripper(left=True)` / `close_gripper(left=True)`
-  - `gripper_wait()` for blocking gripper feedback
+Zeus (zeus-master):
+- MoveIt + ROS state and control for UR5e.
+- Robotiq integration via ROS topics.
 
-2.2 What we wrap
-In `instant_policy/ip/deployment/state/zeus_state.py`:
-- We call `get_current_pose()` on the MoveIt group.
-- We convert to 4x4 with `transform_from_pose`.
+camera-utils:
+- ROS tools for RGB-D capture and registered depth.
 
-In `instant_policy/ip/deployment/control/zeus_control.py`:
-- We convert a 4x4 target to a Pose with `pose_from_transform`.
-- We plan a cartesian path and execute it.
-- We open/close the Robotiq gripper using existing methods.
+Why we do not use them here:
+- Ubuntu 25 does not support ROS1 Noetic.
+- The ROS-based stacks import rospy at module import time, which fails without
+  a full ROS1 install.
 
-Deployment-specific guard:
-- We construct `MoveGroupInterface(enable_right=False)` when using the left arm
-  so the right arm is not homed or commanded during initialization.
+What we keep from those stacks:
+- The conceptual data flow (depth -> XYZ via intrinsics -> world frame).
+- The same RealSense intrinsics math (fx, fy, ppx, ppy).
+- The same gripper mapping: 0 closed, 1 open.
 
-2.3 Important Zeus assumptions
-- `MoveGroupInterface` initializes ROS internally.
-- It homes both arms at construction time.
-- MoveIt planning is blocking (not 10 Hz real-time).
-- The base frame used by MoveIt is the "world" for this pipeline.
+What we replace:
+- MoveIt state/control -> ur_rtde (RTDE) state/control.
+- ROS gripper feedback -> direct Robotiq socket driver.
+- ROS camera tools -> direct pyrealsense2 capture + local intrinsics helpers.
 
-We do not assume any additional control features beyond these.
+This keeps the Instant Policy data contract identical while removing ROS.
 
 
-3. What camera-utils already provides (and how we use it)
----------------------------------------------------------
-We use direct RealSense capture via `pyrealsense2` for low latency, then reuse
-utility functions from zeus-master for intrinsics and back-projection.
+3. RTDE + Robotiq stack used by this deployment
+------------------------------------------------
+We use three low-level building blocks:
 
-3.1 Relevant modules
-- `zeus-master/perception/scripts/publish_d405.py`
-  - `get_intrinsics(stream_profile)`
-  - `get_K(intrinsics)` -> 3x3 camera matrix
-- `zeus-master/common/ros_pointcloud.py`
-  - `_get_xyz(depth_m, K)` -> [3, H*W] XYZ points
+1) ur_rtde
+   - `rtde_receive.RTDEReceiveInterface` for state (TCP pose).
+   - `rtde_control.RTDEControlInterface` for motion (moveL or servoL).
 
-3.2 What we reuse
-In `instant_policy/ip/deployment/perception/zeus_perception.py`:
-- We use `get_intrinsics` and `get_K` to build K.
-- We use `_get_xyz` to back-project depth to XYZ.
+2) Robotiq socket protocol
+   - TCP socket on port 63352.
+   - Simple ASCII GET/SET commands for position, speed, and force.
 
-3.3 What we do not assume
-- We do not assume ROS image topics.
-- We do not assume `publish_d405.py` is running.
-- We do not assume a fixed depth scale. We query it from the device.
+3) pyrealsense2
+   - Direct RGB-D capture without ROS topics.
+   - Intrinsics extracted from stream profiles.
+
+These are wrapped by:
+- `state/ur_rtde_state.py`
+- `control/ur_rtde_control.py`
+- `ur/robotiq_gripper.py`
+- `perception/zeus_perception.py` (name kept, but it is ROS-free)
 
 
 4. Data contract and sample structure
@@ -169,7 +160,7 @@ We build `full_sample`:
 5. Coordinate frames and transforms
 -----------------------------------
 We use three frames:
-- W: world/base frame (MoveIt base).
+- W: world/base frame (UR base frame from RTDE).
 - E: end-effector frame.
 - C: camera frame.
 
@@ -201,7 +192,7 @@ per-step delta is the difference between these consecutive targets.
 
 6. Perception pipeline (capture -> mask -> point cloud -> fuse)
 ---------------------------------------------------------------
-Implemented in `perception/zeus_perception.py`.
+Implemented in `perception/zeus_perception.py` (ROS-free).
 
 6.1 Capture
 For each camera:
@@ -210,22 +201,26 @@ For each camera:
 - Extract color and depth arrays.
 - Convert depth to meters using the device depth scale.
 
-6.2 Masking
+6.2 Intrinsics (no ROS)
+We compute K directly from the stream profile intrinsics:
+- fx, fy, ppx, ppy -> 3x3 K.
+
+6.3 Masking
 If segmentation is enabled:
 - Obtain a binary mask (0/1).
 - Multiply depth by mask.
 - If mask shape does not match depth, ignore it.
 
-6.3 Back-projection
+6.4 Back-projection
 - Use `_get_xyz(depth_m, K)` to compute XYZ in camera frame.
 - Filter invalid points:
   - finite coordinates
   - z > 0
 
-6.4 Transform to world
+6.5 Transform to world
 - Apply `T_world_camera` to each point.
 
-6.5 Fuse
+6.6 Fuse
 - Concatenate all camera clouds.
 - Optional voxel downsample.
 - Later, subsample to 2048 points for the model.
@@ -253,12 +248,9 @@ Assumptions:
 - CUDA is required, and this integration expects `cuda:0`.
 - SAM checkpoint is required unless external masks are provided.
 
-7.2 XMem++ via ROS mask topics
-Implemented as `XMemMaskSubscriber`.
-
-- Subscribe to one ROS image topic per camera.
-- Convert masks to binary arrays.
-- Used when `mask_topics` is set in config.
+7.2 XMem++ via external masks
+`XMemMaskSubscriber` can subscribe to external mask topics, but it is ROS-based
+and not used in the ROS-free deployment.
 
 7.3 Why SAM is required by default
 XMem++ must be seeded with an initial mask. The paper seeds with SAM.
@@ -267,33 +259,34 @@ If no external masks are provided, we require SAM weights.
 
 8. State estimation and gripper mapping
 ---------------------------------------
-Implemented in `state/zeus_state.py`.
+Implemented in `state/ur_rtde_state.py`.
 
 8.1 End-effector pose
-- `pose = move_group.get_current_pose().pose`
-- `T_w_e = transform_from_pose(pose)`
+- `pose = rtde_receive.getActualTCPPose()` returns [x, y, z, rx, ry, rz].
+- rx, ry, rz is axis-angle (rotation vector).
+- `T_w_e` is built from position + Rotation.from_rotvec.
 
 8.2 Gripper state
-- Subscribe to `Robotiq2FGripperRobotInput`.
-- `gPO` in [0..255] maps to `grip = gPO / 255`.
-- If stale or missing, return default 0.5.
+- `RobotiqGripper.get_position()` returns 0..255.
+- Normalize to [0, 1] using configured open/closed positions.
+- The live loop thresholds to {0, 1} for the model.
 
-Why a subscriber:
-- Avoids blocking calls and keeps the loop responsive.
+Why direct socket:
+- ROS gripper topics are not available on Ubuntu 25.
+- The Robotiq socket protocol is low-latency and reliable.
 
 
 9. Control and safety gating
 ----------------------------
-Implemented in `control/zeus_control.py` and `control/action_executor.py`.
+Implemented in `control/ur_rtde_control.py` and `control/action_executor.py`.
 
-9.1 Control (MoveIt cartesian planning)
-- Convert target 4x4 to Pose.
-- Plan a cartesian path.
-- Execute plan if fraction >= threshold.
+9.1 Control (RTDE)
+- Convert target 4x4 to UR pose [x, y, z, rx, ry, rz].
+- Execute with `moveL` or `servoL`, based on config.
 
-Limitations:
-- Blocking; not guaranteed 10 Hz.
-- For real-time control, use MoveIt Servo or RTDE.
+Notes:
+- `moveL` is blocking but simple and robust.
+- `servoL` supports streaming; we send one 0.1 s step per action.
 
 9.2 Safety gating
 We enforce:
@@ -314,7 +307,7 @@ Implemented in `demo/demo_collector.py`.
 
 Process:
 - Prompt operator to start.
-- Optionally enable freedrive (if supported).
+- Enable freedrive (UR RTDE freedrive mode).
 - At 10 Hz:
   - capture world-frame point cloud
   - record T_w_e
@@ -365,8 +358,8 @@ Initialization:
 1) Build DeploymentConfig.
 2) Initialize segmentation backend (SAM, XMem++).
 3) Initialize RealSense pipelines.
-4) Initialize MoveGroupInterface.
-5) Initialize state and control wrappers.
+4) Connect RTDE control + receive.
+5) Connect and activate Robotiq gripper.
 6) Load GraphDiffusion model and config.
 
 Runtime loop (single iteration):
@@ -388,7 +381,7 @@ Runtime loop (single iteration):
             actions (relative SE3), grips
                         |
                         v
-             safety gate -> MoveIt execute
+             safety gate -> RTDE execute
 
 
 13. Shapes, units, and normalization
@@ -422,30 +415,45 @@ SegmentationConfig:
 - `sam_checkpoint_path`: SAM weights (required to seed XMem++).
 - `xmem_checkpoint_path`: XMem++ weights (required for XMem++).
 - `xmem_init_with_sam`: seed XMem++ with SAM.
-- `mask_topics`: optional ROS mask topics.
+- `mask_topics`: optional external masks (ROS-based).
 - `mask_threshold`: threshold for float masks.
 - `points_per_side`, `pred_iou_thresh`, etc: SAM parameters.
 
+GripperConfig:
+- `enable`: enable gripper control.
+- `host`: IP for gripper (defaults to robot IP).
+- `port`: 63352 for Robotiq.
+- `open_position`, `closed_position`: calibration endpoints.
+- `speed`, `force`: command parameters.
+
+RTDEControlConfig:
+- `frequency_hz`: RTDE control frequency.
+- `control_mode`: "moveL" or "servoL".
+- `move_speed`, `move_acceleration`: moveL params.
+- `servo_speed`, `servo_acceleration`, `servo_time`,
+  `servo_lookahead`, `servo_gain`: servoL params.
+
 DeploymentConfig:
 - `camera_configs`: list of CameraConfig.
+- `robot_ip`: UR5e IP.
 - `model_path`: Instant Policy checkpoint directory.
 - `num_demos`, `num_traj_wp`, `num_diffusion_iters`.
 - `pcd_num_points`: default 2048.
 - `pcd_voxel_size`: optional downsample size.
 - `execute_until_grip_change`: True by default.
-- `arm`: "lightning" or "thunder".
 
 
 15. Setup and run instructions
 ------------------------------
 1) Prepare calibration:
    - Obtain `T_world_camera` for each RealSense.
-   - Ensure it is in the same world frame as MoveIt.
+   - Ensure it is in the same world frame as the UR base.
 
 2) Configure deployment:
    - Edit `instant_policy/ip/deployment.py`:
      - Set camera serials and `T_world_camera`.
      - Set SAM and XMem checkpoints.
+     - Set `robot_ip` if not default.
 
 3) Collect demos:
    - `python -m ip.deployment --collect-demo --demo-out demo.pkl`
@@ -460,7 +468,7 @@ Common failure modes:
 
 1) Robot moves in wrong direction:
    - `T_world_camera` is wrong or inverted.
-   - `T_w_e` frame does not match MoveIt world.
+   - `T_w_e` frame does not match UR base frame.
 
 2) Jitter or stalling:
    - Poor segmentation (mask includes robot/table).
@@ -471,8 +479,8 @@ Common failure modes:
    - XMem++ not initialized (no seed mask).
 
 4) Controller too slow:
-   - MoveIt planning is blocking.
-   - Use MoveIt Servo or RTDE for streaming.
+   - moveL blocks.
+   - Switch to servoL for faster streaming.
 
 5) Gripper oscillation:
    - Ensure execute-until-grip-change is enabled.
@@ -480,7 +488,7 @@ Common failure modes:
 Sanity checks:
 - Visualize pcd in world and EE frame.
 - Print action magnitudes per step.
-- Confirm gripper topic updates.
+- Confirm gripper returns a stable position.
 
 
 17. File map
@@ -491,7 +499,8 @@ Sanity checks:
 - `instant_policy/ip/deployment/perception/zeus_perception.py`: RealSense capture.
 - `instant_policy/ip/deployment/perception/sam_segmentation.py`: SAM wrapper.
 - `instant_policy/ip/deployment/perception/xmem_segmentation.py`: XMem++.
-- `instant_policy/ip/deployment/state/zeus_state.py`: EE pose + gripper state.
-- `instant_policy/ip/deployment/control/zeus_control.py`: cartesian motion.
+- `instant_policy/ip/deployment/state/ur_rtde_state.py`: RTDE state.
+- `instant_policy/ip/deployment/control/ur_rtde_control.py`: RTDE control.
 - `instant_policy/ip/deployment/control/action_executor.py`: safety checks.
 - `instant_policy/ip/deployment/demo/demo_collector.py`: demo capture.
+- `instant_policy/ip/deployment/ur/robotiq_gripper.py`: Robotiq socket driver.
