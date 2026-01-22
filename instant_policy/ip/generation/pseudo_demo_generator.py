@@ -4,6 +4,13 @@ from typing import List, Optional
 import numpy as np
 from tqdm import tqdm
 
+from glob import glob
+
+try:
+    import imageio.v2 as imageio
+except Exception:
+    imageio = None
+
 from ip.generation.augmentation import TrajectoryAugmenter
 from ip.generation.config import GenerationConfig
 from ip.generation.geometry import make_transform, random_rotation, transform_points
@@ -117,6 +124,11 @@ class PseudoDemoGenerator:
         attached_idx = None
         attached_offset = None
         last_grip = None
+        render_dir = getattr(scene, "_render_dir", None)
+        render_stride = max(1, int(self.config.render_stride))
+        visual_idx = int(self.config.render_visual_camera)
+        if visual_idx < 0 or visual_idx >= len(self.renderer.cameras):
+            visual_idx = 0
         for w in traj:
             grip = int(w.gripper_state)
             if last_grip is None:
@@ -142,10 +154,57 @@ class PseudoDemoGenerator:
                 obj = scene.objects[attached_idx]
                 obj.pose = w.pose @ attached_offset
             pcd = self.renderer.render_observation(scene)
+            color, depth = None, None
             if pcd.size == 0:
                 pcd = self._fallback_pcd(scene)
             pcds.append(pcd)
+            if render_dir is not None and len(pcds) % render_stride == 0:
+                color, depth = self.renderer.render_visual(scene, w.pose, visual_idx)
+                frame_idx = len(pcds) - 1
+                self._save_render_frame(render_dir, frame_idx, color, depth)
         return pcds
+
+    def _save_render_frame(self, render_dir, frame_idx, color, depth):
+        os.makedirs(render_dir, exist_ok=True)
+        color_path = os.path.join(render_dir, f"frame_{frame_idx:05d}.png")
+        if imageio is not None:
+            imageio.imwrite(color_path, color)
+        else:
+            import matplotlib.pyplot as plt
+            plt.imsave(color_path, color)
+        if self.config.render_save_depth and depth is not None:
+            depth_path = os.path.join(render_dir, f"frame_{frame_idx:05d}_depth.png")
+            depth_norm = depth.copy()
+            depth_norm[depth_norm <= 0] = np.nan
+            min_d = np.nanmin(depth_norm)
+            max_d = np.nanmax(depth_norm)
+            if np.isfinite(min_d) and np.isfinite(max_d) and max_d > min_d:
+                depth_vis = (depth_norm - min_d) / (max_d - min_d)
+            else:
+                depth_vis = np.zeros_like(depth_norm)
+            if imageio is not None:
+                imageio.imwrite(depth_path, (depth_vis * 255).astype(np.uint8))
+            else:
+                import matplotlib.pyplot as plt
+                plt.imsave(depth_path, depth_vis, cmap="gray")
+
+    def _write_demo_video(self, render_dir, video_dir=None):
+        if not self.config.render_make_videos:
+            return
+        if imageio is None:
+            print("imageio not available; skipping video generation.")
+            return
+        frames = sorted(glob(os.path.join(render_dir, "frame_*.png")))
+        if not frames:
+            return
+        if video_dir is None:
+            video_dir = render_dir
+        os.makedirs(video_dir, exist_ok=True)
+        out_path = os.path.join(video_dir, f"demo.{self.config.render_video_ext}")
+        writer = imageio.get_writer(out_path, fps=self.config.render_video_fps)
+        for frame in frames:
+            writer.append_data(imageio.imread(frame))
+        writer.close()
 
     def _fallback_pcd(self, scene: Scene):
         points = []
@@ -159,8 +218,10 @@ class PseudoDemoGenerator:
             points = downsample_pcd(points, voxel_size=self.config.render_downsample_voxel)
         return points.astype(np.float32)
 
-    def generate_demo(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator):
+    def generate_demo(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator, render_dir: Optional[str] = None):
         scene = self._vary_scene(base_scene, rng)
+        if render_dir is not None:
+            scene._render_dir = render_dir
         start_pose = self._sample_start_pose(rng)
         waypoints = self.waypoint_sampler.resolve_waypoints(scene, waypoint_specs)
         waypoints = self._perturb_waypoints(waypoints, rng)
@@ -178,13 +239,28 @@ class PseudoDemoGenerator:
         }
         return sample
 
-    def generate_task(self, rng: np.random.Generator):
+    def generate_task(self, rng: np.random.Generator, task_idx: Optional[int] = None):
         base_scene = self.scene_builder.generate_scene(rng)
         waypoint_specs = self.waypoint_sampler.sample_waypoint_specs(base_scene, rng)
         num_demos = int(rng.integers(self.config.num_demos_per_task[0], self.config.num_demos_per_task[1] + 1))
         demos = []
-        for _ in range(num_demos):
-            demos.append(self.generate_demo(base_scene, waypoint_specs, rng))
+        render_root = self.config.render_dir or os.path.join(self.config.save_dir, "_renders")
+        for demo_idx in range(num_demos):
+            render_dir = None
+            if self.config.save_renders:
+                if task_idx is None:
+                    task_tag = "task"
+                else:
+                    task_tag = f"task_{task_idx:06d}"
+                render_dir = os.path.join(render_root, task_tag, f"demo_{demo_idx:02d}")
+            demos.append(self.generate_demo(base_scene, waypoint_specs, rng, render_dir=render_dir))
+            if render_dir is not None and self.config.render_make_videos:
+                if self.config.render_video_dir is None:
+                    video_dir = render_dir
+                else:
+                    rel = os.path.relpath(render_dir, render_root)
+                    video_dir = os.path.join(self.config.render_video_dir, rel)
+                self._write_demo_video(render_dir, video_dir=video_dir)
         return demos
 
     def _build_samples(self, demos: List[dict], rng: np.random.Generator):
@@ -216,19 +292,40 @@ class PseudoDemoGenerator:
             samples.append({"demos": cond_demos, "live": live})
         return samples
 
-    def _next_offset(self, save_dir: str):
+    def _next_offset(self, save_dir: str, min_idx: int = 0, max_idx: Optional[int] = None):
         if not os.path.exists(save_dir):
-            return 0
+            return min_idx
         files = [f for f in os.listdir(save_dir) if f.startswith("data_") and f.endswith(".pt")]
         if not files:
-            return 0
+            return min_idx
         indices = []
         for fname in files:
             try:
                 indices.append(int(fname.split("_")[1].split(".")[0]))
             except ValueError:
                 continue
-        return max(indices) + 1 if indices else 0
+        if max_idx is not None:
+            indices = [i for i in indices if min_idx <= i < max_idx]
+        if not indices:
+            return min_idx
+        return max(indices) + 1
+
+    def _shard_range(self, buffer_size: int, shard_id: int, num_shards: int):
+        if num_shards < 1:
+            raise ValueError("num_shards must be >= 1")
+        if shard_id < 0 or shard_id >= num_shards:
+            raise ValueError("shard_id must be in [0, num_shards)")
+        base = buffer_size // num_shards
+        extra = buffer_size % num_shards
+        if shard_id < extra:
+            start = shard_id * (base + 1)
+            end = start + base + 1
+        else:
+            start = shard_id * base + extra
+            end = start + base
+        if end <= start:
+            raise ValueError("Invalid shard range; increase buffer_size.")
+        return start, end
 
     def generate_dataset(
         self,
@@ -236,14 +333,33 @@ class PseudoDemoGenerator:
         save_dir: str,
         task_start: int = 0,
         append: bool = False,
+        buffer_size: Optional[int] = None,
+        shard_id: int = 0,
+        num_shards: int = 1,
+        fill_buffer: bool = False,
     ):
         os.makedirs(save_dir, exist_ok=True)
-        offset = self._next_offset(save_dir) if append else 0
+        if buffer_size is not None:
+            shard_start, shard_end = self._shard_range(buffer_size, shard_id, num_shards)
+        else:
+            shard_start, shard_end = 0, None
+        offset = self._next_offset(save_dir, shard_start, shard_end) if append else shard_start
         rng = np.random.default_rng(self.config.seed + task_start)
+        wrapped = False
         for task_idx in tqdm(range(task_start, task_start + num_tasks), desc="Generating pseudo-tasks"):
             task_rng = np.random.default_rng(self.config.seed + task_idx)
-            demos = self.generate_task(task_rng)
+            demos = self.generate_task(task_rng, task_idx=task_idx)
             samples = self._build_samples(demos, task_rng)
             for sample in samples:
+                live_len = len(sample["live"]["obs"])
+                if shard_end is not None:
+                    shard_size = shard_end - shard_start
+                    if live_len >= shard_size:
+                        raise RuntimeError("Sample length exceeds shard size. Increase buffer_size.")
+                    if offset + live_len >= shard_end:
+                        offset = shard_start
+                        wrapped = True
                 save_sample(sample, save_dir=save_dir, offset=offset, scene_encoder=self.scene_encoder)
-                offset += len(sample["live"]["obs"])
+                offset += live_len
+                if fill_buffer and wrapped:
+                    return

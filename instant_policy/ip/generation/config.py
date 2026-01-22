@@ -75,6 +75,15 @@ class GenerationConfig:
     cameras: List[CameraConfig] = field(default_factory=default_cameras)
     render_downsample_voxel: float = 0.01
     max_points_per_obs: Optional[int] = None
+    save_renders: bool = False
+    render_dir: Optional[str] = None
+    render_stride: int = 1
+    render_visual_camera: int = 0
+    render_save_depth: bool = False
+    render_make_videos: bool = False
+    render_video_dir: Optional[str] = None
+    render_video_fps: int = 15
+    render_video_ext: str = "mp4"
 
     num_waypoints_demo: int = 10
     pred_horizon: int = 8

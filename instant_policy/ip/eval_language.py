@@ -2,6 +2,7 @@ import argparse
 import pickle
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import trange
 from rlbench.action_modes.action_mode import MoveArmThenGripper
 from rlbench.action_modes.arm_action_modes import EndEffectorPoseViaIK
@@ -103,8 +104,24 @@ def compute_language_bottleneck(model, lang_encoder, data, lang_emb):
                             lang_emb)
 
 
-def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_base', max_execution_steps=30,
-                           execution_horizon=8, num_rollouts=2, headless=False, num_traj_wp=10, restrict_rot=True):
+def _configure_env(env, task, restrict_rot):
+    def temp(position, euler=None, quaternion=None, ignore_collisions=False, trials=300, max_configs=1,
+             distance_threshold=0.65, max_time_ms=10, trials_per_goal=1, algorithm=None, relative_to=None):
+        return env._robot.arm.get_linear_path(position, euler, quaternion, ignore_collisions=ignore_collisions,
+                                              relative_to=relative_to)
+
+    env._robot.arm.get_path = temp
+    env._scene._start_arm_joint_pos = np.array([6.74760377e-05, -1.91104114e-02, -3.62065766e-05, -1.64271665e+00,
+                                                -1.14094291e-07, 1.55336857e+00, 7.85427451e-01])
+
+    rot_bounds = env._scene.task.base_rotation_bounds()
+    mean_rot = (rot_bounds[0][2] + rot_bounds[1][2]) / 2
+    if restrict_rot:
+        env._scene.task.base_rotation_bounds = lambda: ((0.0, 0.0, max(rot_bounds[0][2], mean_rot - np.pi / 3)),
+                                                        (0.0, 0.0, min(rot_bounds[1][2], mean_rot + np.pi / 3)))
+
+
+def _init_env(task_name, headless, restrict_rot):
     obs_config = ObservationConfig()
     obs_config.set_all(True)
     action_mode = MoveArmThenGripper(
@@ -123,21 +140,20 @@ def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_ba
             env._pyrep.step_ui()
 
     task = env.get_task(TASK_NAMES[task_name])
+    _configure_env(env, task, restrict_rot)
+    return env, task
 
-    def temp(position, euler=None, quaternion=None, ignore_collisions=False, trials=300, max_configs=1,
-             distance_threshold=0.65, max_time_ms=10, trials_per_goal=1, algorithm=None, relative_to=None):
-        return env._robot.arm.get_linear_path(position, euler, quaternion, ignore_collisions=ignore_collisions,
-                                              relative_to=relative_to)
 
-    env._robot.arm.get_path = temp
-    env._scene._start_arm_joint_pos = np.array([6.74760377e-05, -1.91104114e-02, -3.62065766e-05, -1.64271665e+00,
-                                                -1.14094291e-07, 1.55336857e+00, 7.85427451e-01])
 
-    rot_bounds = env._scene.task.base_rotation_bounds()
-    mean_rot = (rot_bounds[0][2] + rot_bounds[1][2]) / 2
-    if restrict_rot:
-        env._scene.task.base_rotation_bounds = lambda: ((0.0, 0.0, max(rot_bounds[0][2], mean_rot - np.pi / 3)),
-                                                        (0.0, 0.0, min(rot_bounds[1][2], mean_rot + np.pi / 3)))
+def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_base', max_execution_steps=30,
+                           execution_horizon=8, num_rollouts=2, headless=False, num_traj_wp=10, restrict_rot=True,
+                           env=None, task=None, shutdown_env=True):
+    created_env = False
+    if env is None or task is None:
+        env, task = _init_env(task_name, headless, restrict_rot)
+        created_env = True
+    else:
+        _configure_env(env, task, restrict_rot)
 
     # Dummy demos to satisfy data formatting (not used in language path).
     dummy_demo = None
@@ -216,8 +232,20 @@ def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_ba
         pbar.set_description(f'Evaluating model, SR: {sum(successes)}/{len(successes)}')
         pbar.refresh()
     pbar.close()
-    env.shutdown()
+    if created_env and shutdown_env:
+        env.shutdown()
     return sum(successes) / len(successes)
+
+
+def _load_paraphrases(path):
+    with open(path, 'r', encoding='utf-8') as handle:
+        lines = []
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            lines.append(stripped)
+    return lines
 
 
 def main():
@@ -230,12 +258,18 @@ def main():
     parser.add_argument('--lang_encoder_path', type=str, required=True)
     parser.add_argument('--lang_text', type=str, default=None)
     parser.add_argument('--lang_emb_path', type=str, default=None)
+    parser.add_argument('--paraphrase_file', type=str, default=None)
     parser.add_argument('--lang_model_name', type=str, default='all-mpnet-base-v2')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--seed', type=int, default=None)
     args = parser.parse_args()
 
     restrict_rot = bool(args.restrict_rot)
     compile_models = bool(args.compile_models)
+
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
 
     config = pickle.load(open(f'{args.model_path}/config.pkl', 'rb'))
     config['compile_models'] = False
@@ -259,20 +293,53 @@ def main():
     lang_encoder.load_state_dict(torch.load(args.lang_encoder_path, map_location=config['device']))
     lang_encoder.eval()
 
-    if args.lang_emb_path:
-        lang_emb = torch.load(args.lang_emb_path, map_location=config['device']).unsqueeze(0)
-        lang_emb = lang_emb.to(config['device'])
-    else:
-        if args.lang_text:
-            lang_text = args.lang_text
-        else:
-            lang_text = get_language_description(args.task_name)
-        lang_emb = encode_texts([lang_text], model_name=args.lang_model_name, device=args.device)
+    if args.paraphrase_file:
+        if args.lang_emb_path:
+            raise ValueError('--lang_emb_path is not supported with --paraphrase_file')
+        paraphrases = _load_paraphrases(args.paraphrase_file)
+        if not paraphrases:
+            raise ValueError(f'No paraphrases found in {args.paraphrase_file}')
 
-    sr = rollout_model_language(model, lang_encoder, lang_emb, args.task_name,
-                                num_rollouts=args.num_rollouts, execution_horizon=8,
-                                num_traj_wp=config['traj_horizon'], restrict_rot=restrict_rot)
-    print('Success rate:', sr)
+        base_text = args.lang_text or get_language_description(args.task_name)
+        if base_text not in paraphrases:
+            texts = [base_text] + paraphrases
+            base_idx = 0
+        else:
+            texts = paraphrases
+            base_idx = texts.index(base_text)
+
+        embeddings = encode_texts(texts, model_name=args.lang_model_name, device=args.device)
+        base_emb = embeddings[base_idx]
+
+        env, task = _init_env(args.task_name, headless=False, restrict_rot=restrict_rot)
+        results = []
+        for text, emb in zip(texts, embeddings):
+            sim = F.cosine_similarity(emb.unsqueeze(0), base_emb.unsqueeze(0), dim=-1).item()
+            sr = rollout_model_language(model, lang_encoder, emb.unsqueeze(0), args.task_name,
+                                        num_rollouts=args.num_rollouts, execution_horizon=8,
+                                        num_traj_wp=config['traj_horizon'], restrict_rot=restrict_rot,
+                                        env=env, task=task, shutdown_env=False)
+            results.append((text, sr, sim))
+            print(f'sr={sr:.3f} sim={sim:.3f} text="{text}"')
+        env.shutdown()
+
+        srs = np.array([sr for _, sr, _ in results], dtype=np.float32)
+        print(f'Paraphrase SR mean={srs.mean():.3f} std={srs.std():.3f}')
+    else:
+        if args.lang_emb_path:
+            lang_emb = torch.load(args.lang_emb_path, map_location=config['device']).unsqueeze(0)
+            lang_emb = lang_emb.to(config['device'])
+        else:
+            if args.lang_text:
+                lang_text = args.lang_text
+            else:
+                lang_text = get_language_description(args.task_name)
+            lang_emb = encode_texts([lang_text], model_name=args.lang_model_name, device=args.device)
+
+        sr = rollout_model_language(model, lang_encoder, lang_emb, args.task_name,
+                                    num_rollouts=args.num_rollouts, execution_horizon=8,
+                                    num_traj_wp=config['traj_horizon'], restrict_rot=restrict_rot)
+        print('Success rate:', sr)
 
 
 if __name__ == '__main__':

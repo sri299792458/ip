@@ -29,6 +29,15 @@ def build_config(args):
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
         seed=args.seed,
+        save_renders=args.save_renders,
+        render_dir=args.render_dir,
+        render_stride=args.render_stride,
+        render_visual_camera=args.render_visual_camera,
+        render_save_depth=args.render_save_depth,
+        render_make_videos=args.render_make_videos,
+        render_video_dir=args.render_video_dir,
+        render_video_fps=args.render_video_fps,
+        render_video_ext=args.render_video_ext,
     )
     return config
 
@@ -51,6 +60,10 @@ def main():
     parser.add_argument("--num_tasks", type=int, default=1000)
     parser.add_argument("--task_start", type=int, default=0)
     parser.add_argument("--append", action="store_true")
+    parser.add_argument("--buffer_size", type=int, default=None)
+    parser.add_argument("--shard_id", type=int, default=0)
+    parser.add_argument("--num_shards", type=int, default=1)
+    parser.add_argument("--fill_buffer", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument("--num_objects_range", type=int, nargs=2, default=[2, 2])
@@ -66,6 +79,15 @@ def main():
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
+    parser.add_argument("--save_renders", action="store_true")
+    parser.add_argument("--render_dir", type=str, default=None)
+    parser.add_argument("--render_stride", type=int, default=1)
+    parser.add_argument("--render_visual_camera", type=int, default=0)
+    parser.add_argument("--render_save_depth", action="store_true")
+    parser.add_argument("--render_make_videos", action="store_true")
+    parser.add_argument("--render_video_dir", type=str, default=None)
+    parser.add_argument("--render_video_fps", type=int, default=15)
+    parser.add_argument("--render_video_ext", type=str, default="mp4")
 
     parser.add_argument("--compute_embeddings", action="store_true")
     parser.add_argument("--scene_encoder_path", type=str, default="./checkpoints/scene_encoder.pt")
@@ -83,6 +105,10 @@ def main():
         save_dir=args.save_dir,
         task_start=args.task_start,
         append=args.append,
+        buffer_size=args.buffer_size,
+        shard_id=args.shard_id,
+        num_shards=args.num_shards,
+        fill_buffer=args.fill_buffer,
     )
 
 

@@ -1,0 +1,11 @@
+# Task: open_box (edit this file to match the task you're testing)
+Open the box.
+Lift the box lid.
+Open the container.
+Raise the lid on the box.
+Pull the lid open.
+Push the lid open.
+Swing the lid open.
+Open the box lid.
+Lift the lid up.
+Open the lid of the box.
