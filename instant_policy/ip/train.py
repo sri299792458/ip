@@ -3,10 +3,12 @@ from ip.configs.base_config import config
 import pickle
 import os
 from ip.utils.running_dataset import RunningDataset
+from ip.utils.trajectory_dataset import TrajectoryDataset
 from torch_geometric.data import DataLoader
 from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
 import argparse
+from glob import glob
 
 if __name__ == '__main__':
     ####################################################################################################################
@@ -33,6 +35,16 @@ if __name__ == '__main__':
                         help='Batch size for fine-tuning. When not fine-tuning, it is defined in the config')
     parser.add_argument('--data_path_val', type=str, default='./data/val',
                         help='Path to the validation data.')
+    parser.add_argument('--data_format', type=str, default='steps', choices=['steps', 'trajectory'],
+                        help='Dataset format: steps (data_*.pt) or trajectory (task_*.pt).')
+    parser.add_argument('--num_points', type=int, default=2048,
+                        help='Points per point cloud (trajectory format only).')
+    parser.add_argument('--subsample_live', action='store_true',
+                        help='Subsample live trajectories before sampling a step (trajectory format only).')
+    parser.add_argument('--live_spacing_trans', type=float, default=0.01,
+                        help='Translation spacing for subsample_live (trajectory format only).')
+    parser.add_argument('--live_spacing_rot', type=float, default=3.0,
+                        help='Rotation spacing (degrees) for subsample_live (trajectory format only).')
 
     record = bool(parser.parse_args().record)
     use_wandb = bool(parser.parse_args().use_wandb)
@@ -44,6 +56,11 @@ if __name__ == '__main__':
     model_name = parser.parse_args().model_name
     data_path_train = parser.parse_args().data_path_train
     data_path_val = parser.parse_args().data_path_val
+    data_format = parser.parse_args().data_format
+    num_points = parser.parse_args().num_points
+    subsample_live = parser.parse_args().subsample_live
+    live_spacing_trans = parser.parse_args().live_spacing_trans
+    live_spacing_rot = parser.parse_args().live_spacing_rot
     bs = parser.parse_args().batch_size
     ####################################################################################################################
     save_dir = f'{save_path}/{run_name}' if record else None
@@ -67,12 +84,45 @@ if __name__ == '__main__':
         config['record'] = record
         model = GraphDiffusion(config).to(config['device'])
     ####################################################################################################################
-    dset_val = RunningDataset(data_path_val, len(os.listdir(data_path_val)), rand_g_prob=0)
-    dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
+    if data_format == 'trajectory':
+        val_count = len(glob(os.path.join(data_path_val, 'task_*.pt')))
+        train_count = len(glob(os.path.join(data_path_train, 'task_*.pt')))
+        dset_val = TrajectoryDataset(
+            data_path_val,
+            num_samples=val_count,
+            num_demos=config['num_demos'],
+            traj_horizon=config['traj_horizon'],
+            pred_horizon=config['pre_horizon'],
+            num_points=num_points,
+            rand_g_prob=0.0,
+            subsample_live=subsample_live,
+            live_spacing_trans=live_spacing_trans,
+            live_spacing_rot=live_spacing_rot,
+        )
+        dset = TrajectoryDataset(
+            data_path_train,
+            num_samples=train_count,
+            num_demos=config['num_demos'],
+            traj_horizon=config['traj_horizon'],
+            pred_horizon=config['pre_horizon'],
+            num_points=num_points,
+            rand_g_prob=config['randomize_g_prob'],
+            subsample_live=subsample_live,
+            live_spacing_trans=live_spacing_trans,
+            live_spacing_rot=live_spacing_rot,
+        )
+        dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
+        dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
+                                num_workers=8, pin_memory=True)
+    else:
+        val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
+        train_count = len(glob(os.path.join(data_path_train, 'data_*.pt')))
+        dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0)
+        dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
 
-    dset = RunningDataset(data_path_train, len(os.listdir(data_path_train)), rand_g_prob=config['randomize_g_prob'])
-    dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
-                            num_workers=8, pin_memory=True)
+        dset = RunningDataset(data_path_train, train_count, rand_g_prob=config['randomize_g_prob'])
+        dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
+                                num_workers=8, pin_memory=True)
     ####################################################################################################################
     if record:
         if use_wandb:

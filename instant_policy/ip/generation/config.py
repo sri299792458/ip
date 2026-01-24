@@ -85,6 +85,9 @@ class GenerationConfig:
     render_video_fps: int = 15
     render_video_ext: str = "mp4"
 
+    storage_format: str = "steps"  # "steps" (data_*.pt) or "trajectory" (task_*.pt)
+    pcd_storage_dtype: str = "float32"  # "float32" or "float16"
+
     num_waypoints_demo: int = 10
     pred_horizon: int = 8
     num_points: int = 2048

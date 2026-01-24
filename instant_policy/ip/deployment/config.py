@@ -31,9 +31,6 @@ class SegmentationConfig:
     stability_score_thresh: float = 0.95
     min_mask_region_area: int = 256
     select_largest: bool = True
-    mask_topics: Optional[List[str]] = None
-    mask_timeout_s: float = 0.5
-    mask_threshold: float = 0.5
 
 
 @dataclass

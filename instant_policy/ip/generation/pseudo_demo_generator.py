@@ -6,6 +6,8 @@ from tqdm import tqdm
 
 from glob import glob
 
+import torch
+
 try:
     import imageio.v2 as imageio
 except Exception:
@@ -310,6 +312,24 @@ class PseudoDemoGenerator:
             return min_idx
         return max(indices) + 1
 
+    def _next_task_offset(self, save_dir: str, min_idx: int = 0, max_idx: Optional[int] = None):
+        if not os.path.exists(save_dir):
+            return min_idx
+        files = [f for f in os.listdir(save_dir) if f.startswith("task_") and f.endswith(".pt")]
+        if not files:
+            return min_idx
+        indices = []
+        for fname in files:
+            try:
+                indices.append(int(fname.split("_")[1].split(".")[0]))
+            except ValueError:
+                continue
+        if max_idx is not None:
+            indices = [i for i in indices if min_idx <= i < max_idx]
+        if not indices:
+            return min_idx
+        return max(indices) + 1
+
     def _shard_range(self, buffer_size: int, shard_id: int, num_shards: int):
         if num_shards < 1:
             raise ValueError("num_shards must be >= 1")
@@ -338,6 +358,17 @@ class PseudoDemoGenerator:
         num_shards: int = 1,
         fill_buffer: bool = False,
     ):
+        if self.config.storage_format == "trajectory":
+            return self._generate_dataset_trajectory(
+                num_tasks=num_tasks,
+                save_dir=save_dir,
+                task_start=task_start,
+                append=append,
+                buffer_size=buffer_size,
+                shard_id=shard_id,
+                num_shards=num_shards,
+                fill_buffer=fill_buffer,
+            )
         os.makedirs(save_dir, exist_ok=True)
         if buffer_size is not None:
             shard_start, shard_end = self._shard_range(buffer_size, shard_id, num_shards)
@@ -363,3 +394,63 @@ class PseudoDemoGenerator:
                 offset += live_len
                 if fill_buffer and wrapped:
                     return
+
+    def _package_task(self, demos: List[dict]):
+        stored = []
+        use_float16 = self.config.pcd_storage_dtype == "float16"
+        for demo in demos:
+            cond = sample_to_cond_demo(demo, self.config.num_waypoints_demo, num_points=self.config.num_points)
+            if use_float16:
+                pcds = [pcd.astype(np.float16, copy=False) for pcd in demo["pcds"]]
+            else:
+                pcds = demo["pcds"]
+            stored.append({
+                "pcds": pcds,
+                "T_w_es": demo["T_w_es"],
+                "grips": demo["grips"],
+                "cond": cond,
+            })
+        return stored
+
+    def _save_task(self, task_data: dict, save_dir: str, index: int):
+        os.makedirs(save_dir, exist_ok=True)
+        path = os.path.join(save_dir, f"task_{index}.pt")
+        torch.save(task_data, path)
+
+    def _generate_dataset_trajectory(
+        self,
+        num_tasks: int,
+        save_dir: str,
+        task_start: int = 0,
+        append: bool = False,
+        buffer_size: Optional[int] = None,
+        shard_id: int = 0,
+        num_shards: int = 1,
+        fill_buffer: bool = False,
+    ):
+        os.makedirs(save_dir, exist_ok=True)
+        if buffer_size is not None:
+            shard_start, shard_end = self._shard_range(buffer_size, shard_id, num_shards)
+        else:
+            shard_start, shard_end = 0, None
+        offset = self._next_task_offset(save_dir, shard_start, shard_end) if append else shard_start
+        rng = np.random.default_rng(self.config.seed + task_start)
+        wrapped = False
+        for task_idx in tqdm(range(task_start, task_start + num_tasks), desc="Generating pseudo-tasks"):
+            task_rng = np.random.default_rng(self.config.seed + task_idx)
+            demos = self.generate_task(task_rng, task_idx=task_idx)
+            task_data = {
+                "task_id": task_idx,
+                "demos": self._package_task(demos),
+            }
+            if shard_end is not None:
+                shard_size = shard_end - shard_start
+                if shard_size < 1:
+                    raise RuntimeError("Invalid shard size for trajectory buffer.")
+                if offset >= shard_end:
+                    offset = shard_start
+                    wrapped = True
+            self._save_task(task_data, save_dir, offset)
+            offset += 1
+            if fill_buffer and wrapped:
+                return

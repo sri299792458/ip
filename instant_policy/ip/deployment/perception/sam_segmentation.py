@@ -61,17 +61,11 @@ def build_segmenter(config, device: Optional[str] = None, num_cameras: Optional[
         return None
     backend = getattr(config, "backend", "sam").lower()
     if backend == "xmem":
-        from ip.deployment.perception.xmem_segmentation import XMemMaskSubscriber, XMemOnlineSegmenter
-        if config.mask_topics:
-            return XMemMaskSubscriber(
-                mask_topics=config.mask_topics,
-                timeout_s=config.mask_timeout_s,
-                threshold=config.mask_threshold,
-            )
+        from ip.deployment.perception.xmem_segmentation import XMemOnlineSegmenter
         if getattr(config, "xmem_init_with_sam", True):
             checkpoint = config.sam_checkpoint_path or config.checkpoint_path
             if not checkpoint:
-                raise ValueError("SAM checkpoint is required to seed XMem++ when mask_topics are not provided")
+                raise ValueError("SAM checkpoint is required to seed XMem++")
         if num_cameras is None:
             raise ValueError("num_cameras is required for XMem online segmentation")
         return XMemOnlineSegmenter(

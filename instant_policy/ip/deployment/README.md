@@ -217,11 +217,7 @@ Assumptions:
 - CUDA is required, and this integration expects `cuda:0`.
 - SAM checkpoint is required unless external masks are provided.
 
-6.2 External masks
-`XMemMaskSubscriber` can subscribe to external mask streams if you already
-run a separate segmentation process. This path requires ROS and is optional.
-
-6.3 Why SAM is required by default
+6.2 Why SAM is required by default
 XMem++ must be seeded with an initial mask. The paper seeds with SAM.
 If no external masks are provided, we require SAM weights.
 
@@ -282,6 +278,7 @@ Process:
   - record T_w_e
   - record gripper state
 - Stop on user input.
+  - While recording: `o` = open, `c` = close, `q` or ESC = stop.
 
 Conversion:
 - `sample_to_cond_demo` extracts L=10 waypoints.
@@ -384,8 +381,6 @@ SegmentationConfig:
 - `sam_checkpoint_path`: SAM weights (required to seed XMem++).
 - `xmem_checkpoint_path`: XMem++ weights (required for XMem++).
 - `xmem_init_with_sam`: seed XMem++ with SAM.
-- `mask_topics`: optional external masks.
-- `mask_threshold`: threshold for float masks.
 - `points_per_side`, `pred_iou_thresh`, etc: SAM parameters.
 
 GripperConfig:

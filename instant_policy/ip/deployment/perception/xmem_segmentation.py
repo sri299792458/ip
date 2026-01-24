@@ -1,19 +1,8 @@
 import os
 import sys
-import time
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
-
-try:
-    import rospy
-    from sensor_msgs.msg import Image
-except Exception as exc:  # pragma: no cover - ROS runtime dependency
-    rospy = None
-    Image = None
-    _ROS_IMPORT_ERROR = exc
-else:
-    _ROS_IMPORT_ERROR = None
 
 
 def _ensure_xmem_on_path():
@@ -22,53 +11,6 @@ def _ensure_xmem_on_path():
     if xmem_path not in sys.path:
         sys.path.insert(0, xmem_path)
     return xmem_path
-
-
-class XMemMaskSubscriber:
-    def __init__(self, mask_topics: List[str], timeout_s: float = 0.5, threshold: float = 0.5):
-        if rospy is None:
-            raise ImportError(f"rospy is required for XMem masks: {_ROS_IMPORT_ERROR}")
-        if not mask_topics:
-            raise ValueError("mask_topics must be provided for XMem mask subscription")
-
-        self._timeout_s = timeout_s
-        self._threshold = threshold
-        self._masks = [None for _ in mask_topics]
-        self._stamps = [None for _ in mask_topics]
-
-        for idx, topic in enumerate(mask_topics):
-            rospy.Subscriber(topic, Image, self._on_mask, callback_args=idx, queue_size=1)
-
-    def _on_mask(self, msg: Image, idx: int):
-        mask = self._image_to_mask(msg)
-        self._masks[idx] = mask
-        self._stamps[idx] = time.time()
-
-    def _image_to_mask(self, msg: Image) -> np.ndarray:
-        h, w = msg.height, msg.width
-        if msg.encoding in ("mono8", "8UC1"):
-            data = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w)
-            mask = data > 0
-        elif msg.encoding in ("16UC1",):
-            data = np.frombuffer(msg.data, dtype=np.uint16).reshape(h, w)
-            mask = data > 0
-        elif msg.encoding in ("32FC1",):
-            data = np.frombuffer(msg.data, dtype=np.float32).reshape(h, w)
-            mask = data > self._threshold
-        else:
-            data = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w)
-            mask = data > 0
-        return mask.astype(np.uint8)
-
-    def get_masks(self) -> List[Optional[np.ndarray]]:
-        now = time.time()
-        masks = []
-        for mask, stamp in zip(self._masks, self._stamps):
-            if mask is None or stamp is None or (now - stamp) > self._timeout_s:
-                masks.append(None)
-            else:
-                masks.append(mask)
-        return masks
 
 
 class XMemOnlineSegmenter:

@@ -38,6 +38,8 @@ def build_config(args):
         render_video_dir=args.render_video_dir,
         render_video_fps=args.render_video_fps,
         render_video_ext=args.render_video_ext,
+        storage_format=args.storage_format,
+        pcd_storage_dtype=args.pcd_storage_dtype,
     )
     return config
 
@@ -65,6 +67,8 @@ def main():
     parser.add_argument("--num_shards", type=int, default=1)
     parser.add_argument("--fill_buffer", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--storage_format", type=str, default="steps", choices=["steps", "trajectory"])
+    parser.add_argument("--pcd_storage_dtype", type=str, default="float32", choices=["float32", "float16"])
 
     parser.add_argument("--num_objects_range", type=int, nargs=2, default=[2, 2])
     parser.add_argument("--num_waypoints_range", type=int, nargs=2, default=[2, 6])

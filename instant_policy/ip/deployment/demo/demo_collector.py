@@ -17,36 +17,62 @@ class DemoCollector:
         print("Move robot to start position, press ENTER to begin recording...")
         input()
 
-        if hasattr(self.control, "enable_freedrive"):
-            self.control.enable_freedrive()
+        try:
+            from pynput import keyboard
+        except Exception as exc:
+            raise ImportError("pynput is required for demo hotkeys. Install with `pip install pynput`.") from exc
 
         frames = {"pcds": [], "T_w_es": [], "grips": []}
         stop_event = threading.Event()
 
-        def wait_stop():
-            input("Recording... Press ENTER to stop.\n")
-            stop_event.set()
+        def on_press(key):
+            if stop_event.is_set():
+                return False
+            if key == keyboard.Key.esc:
+                stop_event.set()
+                return False
+            try:
+                char = key.char.lower()
+            except AttributeError:
+                return None
+            if char == "q":
+                stop_event.set()
+                return False
+            if char == "o":
+                if hasattr(self.control, "execute_gripper"):
+                    self.control.execute_gripper(1.0)
+            elif char == "c":
+                if hasattr(self.control, "execute_gripper"):
+                    self.control.execute_gripper(0.0)
+            return None
 
-        threading.Thread(target=wait_stop, daemon=True).start()
+        listener = keyboard.Listener(on_press=on_press)
+        listener.start()
 
-        period = 1.0 / rate_hz
-        while not stop_event.is_set():
-            start = time.time()
-            pcd_w = self.perception.capture_pcd_world(use_segmentation=use_segmentation)
-            T_w_e = self.state.get_T_w_e()
-            grip = self.state.get_gripper_state()
-            grip = 1.0 if grip >= 0.5 else 0.0
+        print("Recording... hotkeys: o=open, c=close, q/esc=stop")
+        if hasattr(self.control, "enable_freedrive"):
+            self.control.enable_freedrive()
 
-            frames["pcds"].append(pcd_w)
-            frames["T_w_es"].append(T_w_e)
-            frames["grips"].append(grip)
+        try:
+            period = 1.0 / rate_hz
+            while not stop_event.is_set():
+                start = time.time()
+                pcd_w = self.perception.capture_pcd_world(use_segmentation=use_segmentation)
+                T_w_e = self.state.get_T_w_e()
+                grip = self.state.get_gripper_state()
+                grip = 1.0 if grip >= 0.5 else 0.0
 
-            elapsed = time.time() - start
-            if elapsed < period:
-                time.sleep(period - elapsed)
+                frames["pcds"].append(pcd_w)
+                frames["T_w_es"].append(T_w_e)
+                frames["grips"].append(grip)
 
-        if hasattr(self.control, "disable_freedrive"):
-            self.control.disable_freedrive()
+                elapsed = time.time() - start
+                if elapsed < period:
+                    time.sleep(period - elapsed)
+        finally:
+            listener.stop()
+            if hasattr(self.control, "disable_freedrive"):
+                self.control.disable_freedrive()
 
         print(f"Recorded {len(frames['pcds'])} frames")
         return frames
