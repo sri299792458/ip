@@ -122,6 +122,7 @@ dependencies:
   - pytorch-lightning=2.4.0=pyhd8ed1ab_0
   - pytorch-mutex=1.0=cuda
   - pytorch-scatter=2.1.2=py310_torch_2.2.0_cu118
+  - torchvision=0.17.0=py310_cu118
   - pyyaml=6.0.2=py310h5eee18b_0
   - readline=8.2=h5eee18b_0
   - requests=2.32.3=py310h06a4308_1

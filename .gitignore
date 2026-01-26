@@ -4,3 +4,6 @@ XMem2-main/
 zeus-master/
 SPARK-Remote-main/
 camera-utils-main/
+instant_policy/checkpoints/
+instant_policy/demos/
+instant_policy/ip/deployment/debug_outputs/

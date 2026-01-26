@@ -61,7 +61,7 @@ class RTDEControlConfig:
 class DeploymentConfig:
     camera_configs: List[CameraConfig] = field(default_factory=list)
     robot_ip: str = "192.168.1.102"
-    model_path: str = "./checkpoints"
+    model_path: str = "./checkpoints/ip"
     num_demos: int = 2
     num_traj_wp: int = 10
     max_execution_steps: int = 100

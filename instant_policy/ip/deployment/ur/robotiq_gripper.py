@@ -78,8 +78,15 @@ class RobotiqGripper:
         time.sleep(0.5)
         self._set_var(self.ACT, 1)
         time.sleep(0.5)
-        if self._get_var(self.STA) != 3:
-            raise RuntimeError("Robotiq gripper did not activate")
+        # STA can take a moment to reach 3 after activation.
+        for _ in range(6):
+            try:
+                if self._get_var(self.STA) == 3:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.5)
+        raise RuntimeError("Robotiq gripper did not activate")
 
     def move(self, position: int, speed: int = 255, force: int = 100) -> None:
         position = int(max(0, min(255, position)))

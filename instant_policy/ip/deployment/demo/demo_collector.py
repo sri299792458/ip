@@ -1,6 +1,7 @@
 import pickle
 import threading
 import time
+from pathlib import Path
 from typing import Dict
 
 from ip.utils.data_proc import sample_to_cond_demo
@@ -81,6 +82,9 @@ class DemoCollector:
         return sample_to_cond_demo(raw_demo, num_traj_wp)
 
     def save_demo(self, demo: Dict, path: str) -> None:
+        parent = Path(path).expanduser().resolve().parent
+        if parent.name:
+            parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
             pickle.dump(demo, f)
 

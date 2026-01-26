@@ -102,6 +102,24 @@ class RealSensePerception:
             except Exception:
                 pass
 
+    @property
+    def segmenter(self):
+        return self._segmenter
+
+    def capture_rgb(self, camera_index: int, warmup: int = 5) -> np.ndarray:
+        if camera_index < 0 or camera_index >= len(self._cameras):
+            raise IndexError("camera_index out of range")
+        cam = self._cameras[camera_index]
+        for _ in range(warmup):
+            cam.pipeline.wait_for_frames()
+        frames = cam.pipeline.wait_for_frames()
+        if cam.align is not None:
+            frames = cam.align.process(frames)
+        color_frame = frames.get_color_frame()
+        if not color_frame:
+            raise RuntimeError(f"No color frame for camera index {camera_index}")
+        return np.asanyarray(color_frame.get_data())
+
     def _segment(self, rgb: np.ndarray) -> Optional[np.ndarray]:
         if self._segmenter is None:
             return None

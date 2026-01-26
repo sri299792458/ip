@@ -45,7 +45,7 @@ class SAMSegmenter:
         if not masks:
             return None
         if self._select_largest:
-            best = max(masks, key=lambda m: m.get("area", 0))
+            best = max(masks, key=lambda m: m.get("area", m["segmentation"].sum()))
             return best["segmentation"].astype(np.uint8)
         combined = np.zeros_like(masks[0]["segmentation"], dtype=bool)
         for m in masks:

@@ -26,6 +26,7 @@ class InstantPolicyDeployment:
         perception=None,
         state=None,
         control=None,
+        load_model: bool = True,
     ):
         self.config = config
         self.perception = perception
@@ -63,23 +64,26 @@ class InstantPolicyDeployment:
                 rtde_receive = URRTDEState.connect(config.robot_ip)
             if self.state is None:
                 self.state = URRTDEState(rtde_receive, gripper=gripper)
-            if self.control is None:
-                self.control = URRTDEControl(
-                    rtde_control,
-                    control_config=config.rtde,
-                    gripper=gripper,
-                    gripper_config=config.gripper,
-                )
+        if self.control is None:
+            self.control = URRTDEControl(
+                rtde_control,
+                control_config=config.rtde,
+                gripper=gripper,
+                gripper_config=config.gripper,
+            )
 
         self.executor = ActionExecutor(self.control, self.state, config.safety)
-        self.model, self.model_config = self._load_model(
-            config.model_path,
-            config.num_demos,
-            config.num_diffusion_iters,
-            config.device,
-        )
+        self.model = None
+        self.model_config = None
         self._demo_embds = None
         self._demo_pos = None
+        if load_model:
+            self.model, self.model_config = self._load_model(
+                config.model_path,
+                config.num_demos,
+                config.num_diffusion_iters,
+                config.device,
+            )
 
     def _load_model(self, model_path: str, num_demos: int, num_diffusion_iters: int, device: Optional[str]):
         config = pickle.load(open(f"{model_path}/config.pkl", "rb"))
@@ -117,6 +121,8 @@ class InstantPolicyDeployment:
         return prepared[: self.model_config["num_demos"]]
 
     def run(self, demos: Iterable[dict], max_steps: Optional[int] = None, execution_horizon: Optional[int] = None) -> bool:
+        if self.model is None or self.model_config is None:
+            raise RuntimeError("Model is not loaded. Initialize with load_model=True to run deployment.")
         prepared_demos = self._prepare_demos(demos)
         pred_horizon = self.model_config["pre_horizon"]
         max_steps = max_steps or self.config.max_execution_steps
