@@ -27,11 +27,13 @@ class InstantPolicyDeployment:
         state=None,
         control=None,
         load_model: bool = True,
+        debug_gripper: bool = False,
     ):
         self.config = config
         self.perception = perception
         self.state = state
         self.control = control
+        self._debug_gripper = debug_gripper
 
         if self.perception is None:
             if not config.camera_configs:
@@ -63,16 +65,23 @@ class InstantPolicyDeployment:
             if rtde_receive is None:
                 rtde_receive = URRTDEState.connect(config.robot_ip)
             if self.state is None:
-                self.state = URRTDEState(rtde_receive, gripper=gripper)
+                self.state = URRTDEState(
+                    rtde_receive,
+                    gripper=gripper,
+                    tcp_offset_in_code=config.tcp_offset_in_code,
+                    tcp_offset_m=config.tcp_offset_m,
+                )
         if self.control is None:
             self.control = URRTDEControl(
                 rtde_control,
                 control_config=config.rtde,
                 gripper=gripper,
                 gripper_config=config.gripper,
+                tcp_offset_in_code=config.tcp_offset_in_code,
+                tcp_offset_m=config.tcp_offset_m,
             )
 
-        self.executor = ActionExecutor(self.control, self.state, config.safety)
+        self.executor = ActionExecutor(self.control, self.state, config.safety, debug_gripper=debug_gripper)
         self.model = None
         self.model_config = None
         self._demo_embds = None
@@ -134,9 +143,11 @@ class InstantPolicyDeployment:
 
         for k in range(max_steps):
             T_w_e = self.state.get_T_w_e()
-            grip = self.state.get_gripper_state()
-            grip = 1.0 if grip >= 0.5 else 0.0
+            grip_raw = self.state.get_gripper_state()
+            grip = 1.0 if grip_raw >= 0.5 else 0.0  # 1=open, 0=closed
             pcd_w = self.perception.capture_pcd_world(use_segmentation=self.config.segmentation.enable)
+            if self.config.show_masks:
+                self._show_masks()
             if pcd_w.size == 0:
                 print("Empty point cloud, skipping step")
                 continue
@@ -145,6 +156,8 @@ class InstantPolicyDeployment:
                 subsample_pcd(pcd_w, num_points=self.config.pcd_num_points),
                 np.linalg.inv(T_w_e),
             )
+            if self.config.debug_frame_sanity and (k % self.config.debug_frame_every == 0):
+                self._print_frame_sanity(T_w_e, pcd_ee)
 
             full_sample["live"] = {
                 "obs": [pcd_ee],
@@ -171,9 +184,24 @@ class InstantPolicyDeployment:
                 actions = actions.squeeze().cpu().numpy()
                 grips = grips.squeeze().cpu().numpy()
 
+            print("Policy output actions (first 3):")
+            for idx in range(min(3, len(actions))):
+                print(f"  [{idx}] T_e_e_rel:\n{actions[idx]}")
+            state_label = "open" if grip >= 0.5 else "closed"
+            print(f"Current gripper raw={grip_raw:.3f} bin={grip} ({state_label})")
+            print("Policy output grips (first 8):", grips[: min(8, len(grips))])
+            if self._debug_gripper:
+                grip_cmds = (grips + 1.0) / 2.0
+                grip_bins = (grip_cmds >= 0.5).astype(int)
+                flips = int(np.sum(np.abs(np.diff(grip_bins[:pred_horizon]))))
+                print("Policy grip cmds (first 8):", np.round(grip_cmds[: min(8, len(grip_cmds))], 3))
+                print("Policy grip bins (first 8):", grip_bins[: min(8, len(grip_bins))].tolist())
+                print(f"Pred horizon grip flips: {flips}")
+
             step_horizon = execution_horizon
             if step_horizon == pred_horizon and self.config.execute_until_grip_change:
                 step_horizon = self._horizon_until_grip_change(grips, grip, pred_horizon)
+            print(f"Step horizon: {step_horizon}/{pred_horizon} (execute_until_grip_change={self.config.execute_until_grip_change})")
 
             success, steps, error = self.executor.execute_actions(
                 actions, grips, T_w_e, horizon=step_horizon
@@ -184,6 +212,63 @@ class InstantPolicyDeployment:
 
             print(f"Step {k}: executed {steps} actions")
         return True
+
+    def _show_masks(self) -> None:
+        try:
+            import cv2
+        except Exception:
+            return
+
+        frames = self.perception.get_last_debug_frames()
+        for frame in frames:
+            rgb = frame.get("rgb")
+            if rgb is None:
+                continue
+            mask = frame.get("mask")
+            overlay = rgb.copy()
+            if mask is not None:
+                if mask.shape != overlay.shape[:2]:
+                    mask = None
+                else:
+                    green = np.zeros_like(overlay)
+                    green[..., 1] = 255
+                    overlay = np.where(
+                        mask[..., None].astype(bool),
+                        (0.3 * overlay + 0.7 * green).astype(overlay.dtype),
+                        overlay,
+                    )
+            bgr = overlay[..., ::-1]
+            cam_idx = frame.get("camera_index", 0)
+            cv2.imshow(f"policy_masks_cam{cam_idx}", bgr)
+        cv2.waitKey(1)
+
+    def _print_frame_sanity(self, T_w_e: np.ndarray, pcd_ee: np.ndarray) -> None:
+        print("Frame sanity:")
+        if self.config.tcp_offset_in_code and self.config.tcp_offset_m is not None:
+            offset = np.array(self.config.tcp_offset_m, dtype=np.float64).reshape(3)
+            T_offset = np.eye(4, dtype=np.float64)
+            T_offset[:3, 3] = offset
+            T_w_flange = T_w_e @ np.linalg.inv(T_offset)
+            delta = T_w_e[:3, 3] - T_w_flange[:3, 3]
+            print(f"  tcp_offset_in_code=True, tcp_offset_m={offset.tolist()}")
+            print(f"  T_w_e (tip, used by policy) pos: {np.round(T_w_e[:3, 3], 4)}")
+            print(f"  T_w_flange (offset removed) pos: {np.round(T_w_flange[:3, 3], 4)}")
+            print(
+                "  tip-flange in world:",
+                np.round(delta, 4),
+                f"(norm {np.linalg.norm(delta):.4f} m)",
+            )
+            print("  Note: if robot TCP is already set to the tip, disable tcp_offset_in_code.")
+        else:
+            print("  tcp_offset_in_code=False; T_w_e is RTDE-reported TCP pose.")
+            print(f"  T_w_e pos: {np.round(T_w_e[:3, 3], 4)}")
+
+        if pcd_ee is not None and pcd_ee.size:
+            mean = pcd_ee.mean(axis=0)
+            p_min = pcd_ee.min(axis=0)
+            p_max = pcd_ee.max(axis=0)
+            print(f"  pcd_ee mean: {np.round(mean, 4)}")
+            print(f"  pcd_ee bounds min: {np.round(p_min, 4)} max: {np.round(p_max, 4)}")
 
     @staticmethod
     def _horizon_until_grip_change(grips: np.ndarray, current_grip: float, max_horizon: int) -> int:

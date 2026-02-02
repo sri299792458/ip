@@ -25,6 +25,7 @@ class DemoCollector:
 
         frames = {"pcds": [], "T_w_es": [], "grips": []}
         stop_event = threading.Event()
+        grip_override = {"value": None}
 
         def on_press(key):
             if stop_event.is_set():
@@ -42,9 +43,11 @@ class DemoCollector:
             if char == "o":
                 if hasattr(self.control, "execute_gripper"):
                     self.control.execute_gripper(1.0)
+                grip_override["value"] = 1.0
             elif char == "c":
                 if hasattr(self.control, "execute_gripper"):
                     self.control.execute_gripper(0.0)
+                grip_override["value"] = 0.0
             return None
 
         listener = keyboard.Listener(on_press=on_press)
@@ -60,8 +63,13 @@ class DemoCollector:
                 start = time.time()
                 pcd_w = self.perception.capture_pcd_world(use_segmentation=use_segmentation)
                 T_w_e = self.state.get_T_w_e()
-                grip = self.state.get_gripper_state()
-                grip = 1.0 if grip >= 0.5 else 0.0
+                grip = self.state.get_gripper_state(default=None)
+                if grip_override["value"] is not None:
+                    grip = grip_override["value"]
+                if grip is None:
+                    grip = 1.0
+                else:
+                    grip = 1.0 if grip >= 0.5 else 0.0
 
                 frames["pcds"].append(pcd_w)
                 frames["T_w_es"].append(T_w_e)

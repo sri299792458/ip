@@ -371,6 +371,12 @@ def main():
         default=None,
         help="Output JSON path (default: ip/deployment/calibration_outputs/...)",
     )
+    parser.add_argument(
+        "--arm",
+        choices=["left", "right"],
+        default=None,
+        help="Convenience suffix for output file name (e.g. realsense_T_world_camera_left.json).",
+    )
     args = parser.parse_args()
 
     T_world_tag = _parse_world_tag(args)
@@ -432,9 +438,12 @@ def main():
     if args.out:
         out_path = Path(args.out)
     else:
-        out_path = Path(__file__).resolve().parent / "calibration_outputs"
-        out_path.mkdir(parents=True, exist_ok=True)
-        out_path = out_path / "realsense_T_world_camera.json"
+        out_dir = Path(__file__).resolve().parent / "calibration_outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if args.arm:
+            out_path = out_dir / f"realsense_T_world_camera_{args.arm}.json"
+        else:
+            out_path = out_dir / "realsense_T_world_camera.json"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:

@@ -240,7 +240,7 @@ T[:3, :3] = Rotation.from_rotvec(pose[3:]).as_matrix()  # rotation
 | -------------------------------------------- | ----------------------------------------------------------------------------- |
 | `connect(robot_ip, control_config)`          | Creates `RTDEControlInterface` at configured frequency                        |
 | `execute_pose(T_w_e)`                        | Converts 4x4 to UR pose `[x, y, z, rx, ry, rz]`, executes `moveL` or `servoL` |
-| `execute_gripper(command)`                   | Opens or closes gripper based on command > 0.5                                |
+| `execute_gripper(command)`                   | Opens if command > 0.5, closes otherwise                                     |
 | `enable_freedrive()` / `disable_freedrive()` | For kinesthetic teaching                                                      |
 
 **Control Modes**:
@@ -257,9 +257,7 @@ T[:3, :3] = Rotation.from_rotvec(pose[3:]).as_matrix()  # rotation
 
 | Parameter         | Default             | Description               |
 | ----------------- | ------------------- | ------------------------- |
-| `workspace_min`   | `[0.2, -0.4, 0.05]` | XYZ lower bounds (meters) |
-| `workspace_max`   | `[0.7, 0.4, 0.5]`   | XYZ upper bounds (meters) |
-| `max_translation` | `0.01`              | 1 cm per step             |
+| `max_translation` | `0.025`             | 2.5 cm per step           |
 | `max_rotation`    | `3°`                | 3 degrees per step        |
 
 **Class: `ActionExecutor`**
@@ -267,7 +265,7 @@ T[:3, :3] = Rotation.from_rotvec(pose[3:]).as_matrix()  # rotation
 | Method                                                    | Description                                                   |
 | --------------------------------------------------------- | ------------------------------------------------------------- |
 | `execute_actions(actions, grips, T_w_e_initial, horizon)` | Executes up to `horizon` actions with safety checks           |
-| `_check_safety(T_prev, T_next)`                           | Validates workspace bounds, translation limit, rotation limit |
+| `_check_safety(T_prev, T_next)`                           | Validates translation and rotation limits                     |
 
 **Action Composition**:
 ```python

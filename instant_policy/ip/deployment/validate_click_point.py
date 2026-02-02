@@ -27,6 +27,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     rtde_receive = None
 
+from ip.deployment.config import RTDEControlConfig
+
 
 def _require_deps():
     if rs is None:
@@ -83,15 +85,98 @@ def main():
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--robot-ip", default=None, help="Optional: print TCP pose for comparison")
+    parser.add_argument(
+        "--move-on-click",
+        action="store_true",
+        help="Enable moving the robot to the last clicked point (press 'm' to execute).",
+    )
+    parser.add_argument(
+        "--auto-move",
+        action="store_true",
+        help="Move automatically after a click (use with caution).",
+    )
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Skip confirmation prompt before moving.",
+    )
+    parser.add_argument(
+        "--control-mode",
+        choices=["moveL", "servoL"],
+        default="moveL",
+        help="Motion mode for RTDE control.",
+    )
+    parser.add_argument("--move-speed", type=float, default=0.1, help="moveL speed (m/s)")
+    parser.add_argument("--move-acceleration", type=float, default=0.5, help="moveL acceleration (m/s^2)")
+    parser.add_argument(
+        "--tcp-offset-in-code",
+        action="store_true",
+        help="Apply TCP offset in code (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-tcp-offset-in-code",
+        action="store_false",
+        dest="tcp_offset_in_code",
+        help="Disable TCP offset in code (use if robot TCP is set to gripper).",
+    )
+    parser.add_argument(
+        "--tcp-offset-m",
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=("X", "Y", "Z"),
+        help="TCP offset in meters (default: 0 0 0.162 if --tcp-offset-in-code).",
+    )
+    parser.add_argument(
+        "--approach-z-offset",
+        type=float,
+        default=0.0,
+        help="Optional Z offset (meters) to approach above the point before final move.",
+    )
+    parser.set_defaults(tcp_offset_in_code=False)
     args = parser.parse_args()
 
     T_world_camera = _load_T_world_camera(Path(args.calib), args.serial)
 
     rtde = None
+    move_enabled = args.move_on_click or args.auto_move
+    if move_enabled and not args.robot_ip:
+        raise ValueError("--robot-ip is required when --move-on-click or --auto-move is set")
+
+    rtde_state = None
+    control = None
+    tcp_offset = None
+    if args.tcp_offset_in_code:
+        tcp_offset = np.array([0.0, 0.0, 0.162], dtype=np.float64)
+        if args.tcp_offset_m is not None:
+            tcp_offset = np.array(args.tcp_offset_m, dtype=np.float64)
+
     if args.robot_ip:
         if rtde_receive is None:
             raise ImportError("ur_rtde is required for --robot-ip")
         rtde = rtde_receive.RTDEReceiveInterface(args.robot_ip)
+
+    if move_enabled:
+        from ip.deployment.control.ur_rtde_control import URRTDEControl
+        from ip.deployment.state.ur_rtde_state import URRTDEState
+
+        rtde_cfg = RTDEControlConfig(
+            control_mode=args.control_mode,
+            move_speed=args.move_speed,
+            move_acceleration=args.move_acceleration,
+        )
+        rtde_control = URRTDEControl.connect(args.robot_ip, rtde_cfg)
+        control = URRTDEControl(
+            rtde_control,
+            rtde_cfg,
+            tcp_offset_in_code=args.tcp_offset_in_code,
+            tcp_offset_m=tcp_offset,
+        )
+        rtde_state = URRTDEState(
+            rtde,
+            tcp_offset_in_code=args.tcp_offset_in_code,
+            tcp_offset_m=tcp_offset,
+        )
 
     pipeline = rs.pipeline()
     config = rs.config()
@@ -108,9 +193,39 @@ def main():
 
     window = "click-to-world"
     last_depth = None
+    last_world = None
+    pending_move = False
+
+    def move_to_point(p_world: np.ndarray) -> None:
+        if control is None or rtde_state is None:
+            print("Robot move requested but RTDE control/state is unavailable.")
+            return
+        T_w_e_current = rtde_state.get_T_w_e()
+        R_current = T_w_e_current[:3, :3]
+        T_target = np.eye(4)
+        T_target[:3, :3] = R_current
+        T_target[:3, 3] = p_world
+
+        if not args.no_confirm:
+            confirm = input(f"Move robot to {p_world.round(4)}? [y/N] ").strip().lower()
+            if confirm not in {"y", "yes"}:
+                print("Move canceled.")
+                return
+
+        if args.approach_z_offset > 0:
+            p_approach = p_world.copy()
+            p_approach[2] += args.approach_z_offset
+            T_approach = np.eye(4)
+            T_approach[:3, :3] = R_current
+            T_approach[:3, 3] = p_approach
+            control.execute_pose(T_approach)
+
+        control.execute_pose(T_target)
 
     def on_mouse(event, x, y, flags, param):
         nonlocal last_depth
+        nonlocal last_world
+        nonlocal pending_move
         if event != cv2.EVENT_LBUTTONDOWN:
             return
         if last_depth is None:
@@ -134,6 +249,11 @@ def main():
             )
             delta = np.array(pose[:3]) - p_world
             print(f"Delta (TCP - point): [{delta[0]:.4f}, {delta[1]:.4f}, {delta[2]:.4f}] m")
+        last_world = p_world
+        if move_enabled:
+            pending_move = True
+            if not args.auto_move:
+                print("Press 'm' to move robot to this point.")
 
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(window, on_mouse)
@@ -150,6 +270,12 @@ def main():
             color = np.asanyarray(color_frame.get_data())
             cv2.imshow(window, color)
             key = cv2.waitKey(1) & 0xFF
+            if key == ord("m") and move_enabled and last_world is not None:
+                pending_move = False
+                move_to_point(last_world)
+            if args.auto_move and pending_move and last_world is not None:
+                pending_move = False
+                move_to_point(last_world)
             if key == ord("q") or key == 27:
                 break
     finally:

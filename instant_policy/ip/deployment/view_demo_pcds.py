@@ -61,6 +61,24 @@ def main():
     parser.add_argument("--show-tcp", action="store_true", help="Show TCP position as a red sphere")
     parser.add_argument("--tcp-radius", type=float, default=0.01, help="TCP sphere radius (meters)")
     parser.add_argument("--policy-view", action="store_true", help="EE frame + subsample (policy input)")
+    parser.add_argument(
+        "--no-ee-axes",
+        action="store_false",
+        dest="show_ee_axes",
+        help="Hide EE axes in policy view.",
+    )
+    parser.add_argument(
+        "--no-ee-view",
+        action="store_false",
+        dest="ee_view",
+        help="Disable EE-aligned viewer camera in policy view.",
+    )
+    parser.add_argument(
+        "--ee-view-distance",
+        type=float,
+        default=0.3,
+        help="Viewer distance (meters) along -Z in EE frame when --ee-view is used.",
+    )
     parser.add_argument("--waypoints", action="store_true", help="Use waypoint frames (training-style)")
     parser.add_argument("--num-points", type=int, default=None, help="Points per frame for policy view")
     parser.add_argument("--num-waypoints", type=int, default=None, help="Number of waypoints if --waypoints")
@@ -72,6 +90,7 @@ def main():
         choices=["square", "diamond", "circle", "rounded", "sparkle"],
         help="Point shape",
     )
+    parser.set_defaults(ee_view=True, show_ee_axes=True)
     args = parser.parse_args()
 
     demo_path = Path(args.demo)
@@ -123,6 +142,19 @@ def main():
 
     server = viser.ViserServer()
     server.scene.world_axes.visible = bool(args.show_axes)
+    if args.policy_view and args.ee_view:
+        # In policy view, points are already in EE frame. Aim the viewer along +Z of EE.
+        server.initial_camera.position = np.array([0.0, 0.0, -args.ee_view_distance], dtype=np.float64)
+        server.initial_camera.look_at = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        server.initial_camera.up = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+    if args.policy_view and args.show_ee_axes:
+        server.scene.add_frame(
+            "/ee",
+            position=np.array([0.0, 0.0, 0.0], dtype=np.float32),
+            wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            axes_length=0.08,
+            axes_radius=0.004,
+        )
 
     first_idx = valid_indices[0]
     pts0 = _frame_points(first_idx)

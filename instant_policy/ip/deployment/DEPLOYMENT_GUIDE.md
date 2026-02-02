@@ -80,12 +80,11 @@ pip install -e .
 pip install ur_rtde
 ```
 
-### 2.5 Install Intel RealSense SDK + Viewer + Python bindings (Conda-local, shared-machine safe)
-This flow keeps everything inside your conda env.
-- Installs under `$CONDA_PREFIX`
-- No DKMS / kernel modules
-- No `/usr/local` install and no `/etc/udev` edits
-- `realsense-viewer` is required for verification
+### 2.5 Install Intel RealSense SDK + Viewer + Python bindings (Conda-local)
+This flow builds librealsense inside your conda env and avoids system-wide installs.
+Only two steps touch the system:
+- Installing build/GUI deps via `apt-get` (required)
+- Installing a udev rule to persist USB permissions (recommended for non-root access)
 
 #### 2.5.1 System build + GUI dependencies (safe global install)
 ```bash
@@ -173,11 +172,29 @@ realsense-viewer
 python -c "import pyrealsense2 as rs; print('OK', rs.__version__); print('devices', len(rs.context().query_devices()))"
 ```
 
-#### 2.5.7 Notes on permissions (shared systems)
-If `rs-enumerate-devices` or `realsense-viewer` shows no device detected but cameras exist (e.g., visible under `/dev/video*`), you likely lack access to USB/video nodes.
-Preferred shared-machine fix (admin-managed):
-- Add your user to `plugdev` and `video`
-- Avoid global udev rules unless the admin wants a standardized policy
+#### 2.5.7 USB permissions (shared systems)
+If `rs-enumerate-devices` or `realsense-viewer` shows no device detected but the camera is visible in `lsusb`, you likely lack access to the USB node.
+After reboot or replug, `/dev/bus/usb/...` is recreated, so permissions can regress without a udev rule.
+
+Recommended (stable, minimal global change):
+- Ensure your user is in `plugdev` and `video`
+- Install the RealSense udev rule once so permissions persist
+
+Install the rule and reload udev:
+```bash
+sudo cp ~/src/librealsense/config/99-realsense-libusb.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Then replug the camera and verify:
+```bash
+conda activate ip_env
+rs-enumerate-devices
+```
+
+No-global-change alternative (not persistent):
+- Use `sudo` (and pass `LD_LIBRARY_PATH` if needed) or ask an admin to apply temporary ACLs
 
 #### 2.5.8 Optional sanity check
 Confirm you are using the env-local binaries:
@@ -276,7 +293,8 @@ cp checkpoints/xmem/XMem.pth XMem2-main/saves/
 **Hardware Configuration**
 - Robot gripper: Robotiq 2F-85
 - Gripper TCP offset (Z): `0.162 m` (162 mm)
-  - Set this in **UR Installation → General → TCP**.
+  - **Handled in code by default** (`tcp_offset_in_code=True`) since the lab keeps the robot TCP at flange.
+  - If you change the robot TCP to the gripper in the teach pendant, set `tcp_offset_in_code=False` to avoid double-counting.
 - Camera 1 serial: `f1380660`
 - Camera 2 serial: `f1371463`
 - ArUco marker:
@@ -285,10 +303,23 @@ cp checkpoints/xmem/XMem.pth XMem2-main/saves/
   - Physical size: `0.05 m` (50 mm)
 
 **World Tag Measurements (Robot Base Frame)**
-Measured by touching the ArUco marker corners with the closed gripper (TCP: Gripper, Feature: Base):
+**Convention:** ArUco CCW_center (origin at tag center; TL has +Y / TR has +X).
+Measured by touching the ArUco marker corners with the closed gripper (Feature: Base).
+If the robot TCP is left at flange, mentally add the 162 mm offset to match the gripper tip, or temporarily switch TCP to the gripper just for measurement.
 - Top-Left (TL): x = `-0.4646`, y = `0.5282`, z = `-0.2563`
 - Top-Right (TR): x = `-0.4661`, y = `0.5283`, z = `-0.3048`
 - Bottom-Left (BL): x = `-0.5143`, y = `0.5289`, z = `-0.2552`
+
+Compute `world_tag.json` from these three points (ArUco frame: X = TL→TR, Y = BL→TL).
+If you read flange poses (x,y,z,rx,ry,rz), you can pass 6 values and the script applies the 0.162 m TCP offset by default.
+```bash
+python compute_world_tag.py \
+  --tl -0.4646 0.5282 -0.2563 \
+  --tr -0.4661 0.5283 -0.3048 \
+  --bl -0.5143 0.5289 -0.2552 \
+  --tag-size 0.05 \
+  --out world_tag.json
+```
 
 Calculated `world_tag.json` (T_world_tag):
 ```
@@ -394,7 +425,8 @@ print("TCP Pose:", rtde_r.getActualTCPPose())
 rtde_c = rtde_control.RTDEControlInterface("10.33.55.90")
 print("RTDE Control connected!")
 ```
-**Note**: If RTDE control fails, ensure the robot is in **Remote Control** and the motors are **ON** (brakes released).
+**Note**: `getActualTCPPose()` returns the pose of the **active robot TCP** (flange by default). The deployment code applies the 162 mm offset when `tcp_offset_in_code=True`.
+If RTDE control fails, ensure the robot is in **Remote Control** and the motors are **ON** (brakes released).
 
 ---
 
@@ -419,6 +451,10 @@ T_world_camera_cam1 = np.array([
     [-0.0654, 0.7882, -0.6119, 0.0865],
     [0.0, 0.0, 0.0, 1.0],
 ])
+
+# TCP offset handling (lab keeps robot TCP at flange)
+config.tcp_offset_in_code = True
+config.tcp_offset_m = np.array([0.0, 0.0, 0.162])
 T_world_camera_cam2 = np.array([
     [0.9978, 0.0556, -0.0352, -0.5160],
     [-0.0283, -0.1209, -0.9923, 1.5065],
@@ -476,12 +512,12 @@ config = DeploymentConfig(
    
     # Control
     rtde=RTDEControlConfig(
-        control_mode="moveL",  # or "servoL"
+        control_mode="servoL",  # or "moveL"
         move_speed=0.1,
         move_acceleration=0.5,
     ),
    
-    # Safety (adjust for your workspace)
+    # Safety (per-step limits)
     safety=None,  # Uses defaults, or provide SafetyLimits
    
     # Execution
@@ -490,9 +526,30 @@ config = DeploymentConfig(
 )
 ```
 
+### Waypoint selection (num_traj_wp)
+Each recorded demo is **downsampled to `num_traj_wp` waypoints** before being fed to the model. The selection is **not uniform** in time. The current logic in `extract_waypoints()`:
+- Always includes the **first** and **last** frame.
+- Adds frames where the **gripper state changes**.
+- Adds extra points where motion between consecutive frames is **very small** (to smooth).
+- If still fewer than `num_traj_wp`, fills remaining slots by **splitting motion-heavy segments**.
+
+So it’s normal to see waypoints clustered early and large jumps later. This is expected and matches the authors’ pipeline.
+
 ---
 
 ## Step 9: Collect Demonstrations
+
+### 9.0 Home Position (default)
+By default, `ip.deployment` will move the robot to a saved **home joint position** before starting demo collection or deployment.
+
+If you haven't saved one yet:
+```bash
+python -m ip.deployment.set_home_position --robot-ip <ROBOT_IP> --save-current
+```
+This writes `ip/deployment/home_joint.json` (can be overridden with `--home`).
+
+To skip the home move, add `--no-home`.
+By default, the gripper is also opened before starting. To skip this, add `--no-open-gripper`.
 
 ### 9.1 Start Demo Collection
 ```bash
@@ -524,7 +581,7 @@ python -m ip.deployment --demo demos/task1_demo1.pkl
 
 ### 10.2 Multiple Demos
 ```bash
-python -m ip.deployment --demo demos/task1_demo1.pkl demos/task1_demo2.pkl
+python -m ip.deployment --demo demos/task1_demo1.pkl --demo demos/task1_demo2.pkl
 ```
 
 ### 10.3 Python API
@@ -568,9 +625,7 @@ python -m ip.deployment.debug_demo \
   --demo demos/task1_demo1.pkl \
   --save-frames \
   --save-ee \
-  --out-dir ip/deployment/debug_outputs \
-  --workspace-min -0.9008 0.2936 -0.4819 \
-  --workspace-max -0.1227 0.5751 0.5293
+  --out-dir ip/deployment/debug_outputs
 ```
 This writes a few PLYs (world + EE frame) into `ip/deployment/debug_outputs` for visual inspection.
 
@@ -631,7 +686,6 @@ Manual seeding lets you select multiple objects per camera and bypass SAM initia
 - Visualize point cloud in world frame to debug
 
 ### Issue: "Safety limit exceeded"
-- Adjust `SafetyLimits` workspace bounds
 - Increase `max_translation` / `max_rotation` if needed (carefully)
 
 ---

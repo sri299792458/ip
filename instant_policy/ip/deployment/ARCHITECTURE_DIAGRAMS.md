@@ -39,7 +39,7 @@ flowchart TB
         
         SegConfig["SegmentationConfig<br/>━━━━━━━━━━━━━━━━<br/>backend: xmem<br/>sam_checkpoint<br/>xmem_checkpoint<br/>xmem_init_with_sam: true"]
         
-        SafetyConfig["SafetyLimits<br/>━━━━━━━━━━━━━━━━<br/>workspace: [0.2,-0.4,0.05]<br/>         → [0.7,0.4,0.5]<br/>max_trans: 0.01m<br/>max_rot: 3°"]
+        SafetyConfig["SafetyLimits<br/>━━━━━━━━━━━━━━━━<br/>max_trans: 0.025m<br/>max_rot: 3°"]
         
         RTDEConfig["RTDEControlConfig<br/>━━━━━━━━━━━━━━━━<br/>mode: moveL/servoL<br/>speed: 0.1 m/s<br/>accel: 0.5 m/s²"]
         
@@ -145,7 +145,7 @@ flowchart TB
             
             Compose["T_target = T_initial @ actions[j]<br/>━━━━━━━━━━━━━━━━<br/>Actions are CUMULATIVE<br/>relative to inference pose"]
             
-            SafetyCheck["Safety Checks<br/>━━━━━━━━━━━━━━━━<br/>✓ pos ∈ workspace bounds<br/>✓ ‖Δpos‖ ≤ 1cm<br/>✓ ‖Δrot‖ ≤ 3°"]
+            SafetyCheck["Safety Checks<br/>━━━━━━━━━━━━━━━━<br/>✓ ‖Δpos‖ ≤ 2.5cm<br/>✓ ‖Δrot‖ ≤ 3°"]
             
             ExecutePose["URRTDEControl.execute_pose()<br/>━━━━━━━━━━━━━━━━<br/>pose = [x,y,z,rx,ry,rz]<br/>moveL(pose, speed, accel)<br/>  or<br/>servoL(pose, ...)"]
             

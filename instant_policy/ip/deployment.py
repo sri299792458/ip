@@ -2,9 +2,19 @@
 Example deployment entrypoint for Instant Policy on UR5e (RTDE, ROS-free).
 """
 import argparse
+import json
 import pickle
+from pathlib import Path
 
 import numpy as np
+
+try:
+    import rtde_control
+except Exception as exc:  # pragma: no cover - optional dependency
+    rtde_control = None
+    _RTDE_IMPORT_ERROR = exc
+else:
+    _RTDE_IMPORT_ERROR = None
 
 from ip.deployment.config import CameraConfig, DeploymentConfig
 from ip.deployment.control.action_executor import SafetyLimits
@@ -14,31 +24,7 @@ from ip.deployment.orchestrator import InstantPolicyDeployment
 
 
 def _build_default_config() -> DeploymentConfig:
-    camera_configs = [
-        CameraConfig(
-            serial="f1380660",
-            T_world_camera=np.array(
-                [
-                    [0.9952, 0.0067, -0.0978, -0.4402],
-                    [-0.0729, -0.6154, -0.7849, 1.1759],
-                    [-0.0654, 0.7882, -0.6119, 0.0865],
-                    [0.0, 0.0, 0.0, 1.0],
-                ]
-            ),
-        ),
-        CameraConfig(
-            serial="f1371463",
-            T_world_camera=np.array(
-                [
-                    [0.9978, 0.0556, -0.0352, -0.5160],
-                    [-0.0283, -0.1209, -0.9923, 1.5065],
-                    [-0.0595, 0.9911, -0.1190, -0.0123],
-                    [0.0, 0.0, 0.0, 1.0],
-                ]
-            ),
-        ),
-    ]
-    config = DeploymentConfig(camera_configs=camera_configs)
+    config = DeploymentConfig(camera_configs=[])
     config.robot_ip = "10.33.55.90"
     config.model_path = "./checkpoints/ip"
     config.segmentation.backend = "xmem"
@@ -49,8 +35,6 @@ def _build_default_config() -> DeploymentConfig:
     config.rtde.move_speed = 0.05
     config.rtde.move_acceleration = 0.2
     config.safety = SafetyLimits(
-        workspace_min=np.array([-0.9008, 0.2936, -0.4819]),
-        workspace_max=np.array([-0.1227, 0.5751, 0.5293]),
         max_translation=0.01,
         max_rotation=np.deg2rad(3.0),
     )
@@ -65,6 +49,90 @@ def _load_demos(paths):
     return demos
 
 
+def _require_rtde():
+    if rtde_control is None:
+        raise ImportError(f"ur_rtde is required: {_RTDE_IMPORT_ERROR}")
+
+
+def _apply_calibration_json(config: DeploymentConfig, calib_path: Path) -> None:
+    if not calib_path.exists():
+        raise FileNotFoundError(f"Calibration file not found: {calib_path}")
+    with calib_path.open("r", encoding="utf-8") as f:
+        calib = json.load(f)
+    cameras = calib.get("cameras", {})
+    if not cameras:
+        raise ValueError(f"No cameras found in calibration file: {calib_path}")
+
+    existing_by_serial = {cfg.serial: cfg for cfg in config.camera_configs}
+    new_configs = []
+    for serial, cam in cameras.items():
+        T = np.array(cam.get("T_world_camera"), dtype=np.float64)
+        if T.shape != (4, 4):
+            continue
+        if serial in existing_by_serial:
+            base = existing_by_serial[serial]
+            new_configs.append(
+                CameraConfig(
+                    serial=serial,
+                    T_world_camera=T,
+                    width=base.width,
+                    height=base.height,
+                    fps=base.fps,
+                    align_to_color=base.align_to_color,
+                )
+            )
+        else:
+            new_configs.append(CameraConfig(serial=serial, T_world_camera=T))
+    if not new_configs:
+        raise ValueError(f"No valid T_world_camera entries in calibration file: {calib_path}")
+    config.camera_configs = new_configs
+
+
+def _load_home_joints(args) -> np.ndarray:
+    if args.home_joints_deg is not None:
+        if len(args.home_joints_deg) != 6:
+            raise ValueError("--home-joints-deg expects 6 values")
+        return np.deg2rad(np.array(args.home_joints_deg, dtype=np.float64))
+    if args.home_joints_rad is not None:
+        if len(args.home_joints_rad) != 6:
+            raise ValueError("--home-joints-rad expects 6 values")
+        return np.array(args.home_joints_rad, dtype=np.float64)
+    if args.home:
+        with open(args.home, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "joints_rad" in data:
+            return np.array(data["joints_rad"], dtype=np.float64)
+        if "joints_deg" in data:
+            return np.deg2rad(np.array(data["joints_deg"], dtype=np.float64))
+        raise ValueError("--home JSON must contain joints_rad or joints_deg")
+    raise ValueError("Provide --home, --home-joints-deg, or --home-joints-rad")
+
+
+def _go_home(args, robot_ip: str) -> None:
+    _require_rtde()
+    joints_rad = _load_home_joints(args)
+    rtde = rtde_control.RTDEControlInterface(robot_ip)
+    try:
+        rtde.moveJ(joints_rad.tolist(), args.home_speed, args.home_accel)
+    finally:
+        # Release remote control so pendant Freedrive is available if needed.
+        try:
+            rtde.stopScript()
+        except Exception:
+            pass
+        try:
+            rtde.disconnect()
+        except Exception:
+            pass
+
+
+def _open_gripper(control, config: DeploymentConfig) -> None:
+    if not config.gripper.enable:
+        return
+    if hasattr(control, "execute_gripper"):
+        control.execute_gripper(1.0)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Instant Policy deployment on UR5e (RTDE)")
     parser.add_argument("--robot-ip", default=None, help="UR5e IP address (default: config.robot_ip)")
@@ -72,23 +140,136 @@ def main():
     parser.add_argument("--collect-demo", action="store_true", help="Collect a kinesthetic demo and exit")
     parser.add_argument("--demo-out", default="demo.pkl", help="Output path for collected demo")
     parser.add_argument("--task-name", default="task", help="Task name for demo collection")
+    parser.add_argument(
+        "--camera-serial",
+        action="append",
+        default=None,
+        help="Use only these camera serials (repeatable).",
+    )
     parser.add_argument("--max-steps", type=int, default=None, help="Max execution steps")
     parser.add_argument("--manual-seed", action="store_true", help="Manually seed XMem masks before running")
     parser.add_argument("--manual-seed-out", default=None, help="Optional output dir for saved manual masks")
+    parser.add_argument(
+        "--calib",
+        default="ip/deployment/calibration_outputs/realsense_T_world_camera.json",
+        help="Calibration JSON to auto-load (default: left arm calibration)",
+    )
+    parser.add_argument(
+        "--execute-until-grip-change",
+        action="store_true",
+        dest="execute_until_grip_change",
+        help="Execute predicted actions until gripper state changes (recommended).",
+    )
+    parser.add_argument(
+        "--no-grip-horizon",
+        action="store_false",
+        dest="execute_until_grip_change",
+        help="Always execute the full action horizon (may cause gripper oscillation).",
+    )
+    parser.add_argument(
+        "--no-home",
+        action="store_false",
+        dest="go_home",
+        help="Skip moving robot to home joints before starting",
+    )
+    parser.add_argument("--home", default="ip/deployment/home_joint.json", help="Path to home joint JSON")
+    parser.add_argument("--home-joints-deg", type=float, nargs=6, help="Home joints in degrees (6 values)")
+    parser.add_argument("--home-joints-rad", type=float, nargs=6, help="Home joints in radians (6 values)")
+    parser.add_argument("--home-speed", type=float, default=1.0, help="Home move joint speed (rad/s)")
+    parser.add_argument("--home-accel", type=float, default=1.2, help="Home move joint accel (rad/s^2)")
+    parser.add_argument(
+        "--no-open-gripper",
+        action="store_false",
+        dest="open_gripper",
+        help="Skip opening the gripper before starting",
+    )
+    parser.add_argument(
+        "--show-masks",
+        action="store_true",
+        help="Show live RGB/mask overlay windows from the policy camera(s).",
+    )
+    parser.add_argument(
+        "--tcp-offset-in-code",
+        action="store_true",
+        dest="tcp_offset_in_code",
+        help="Apply TCP offset in code (tip frame).",
+    )
+    parser.add_argument(
+        "--no-tcp-offset-in-code",
+        action="store_false",
+        dest="tcp_offset_in_code",
+        help="Do not apply TCP offset in code (flange frame).",
+    )
+    parser.add_argument(
+        "--tcp-offset-m",
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=("X", "Y", "Z"),
+        help="TCP offset in meters (overrides config when provided).",
+    )
+    parser.add_argument(
+        "--debug-gripper",
+        action="store_true",
+        help="Print gripper-related debug info from the policy and executor.",
+    )
+    parser.add_argument(
+        "--debug-frame-sanity",
+        action="store_true",
+        help="Print TCP offset/frame sanity info (tip vs flange) during deployment.",
+    )
+    parser.add_argument(
+        "--debug-frame-every",
+        type=int,
+        default=1,
+        help="Print frame sanity every N steps (default: 1, only used with --debug-frame-sanity).",
+    )
+    parser.set_defaults(execute_until_grip_change=True)
+    parser.set_defaults(open_gripper=True)
+    parser.set_defaults(go_home=True)
+    parser.set_defaults(tcp_offset_in_code=None)
     args = parser.parse_args()
 
     config = _build_default_config()
     if args.robot_ip:
         config.robot_ip = args.robot_ip
+    if args.calib:
+        _apply_calibration_json(config, Path(args.calib))
+    config.execute_until_grip_change = args.execute_until_grip_change
+    config.show_masks = args.show_masks
+    if args.tcp_offset_in_code is not None:
+        config.tcp_offset_in_code = args.tcp_offset_in_code
+    if args.tcp_offset_m is not None:
+        config.tcp_offset_m = np.array(args.tcp_offset_m, dtype=np.float64)
+    config.debug_frame_sanity = args.debug_frame_sanity
+    config.debug_frame_every = max(1, int(args.debug_frame_every))
+    if args.camera_serial:
+        serials = set(args.camera_serial)
+        filtered = [cfg for cfg in config.camera_configs if cfg.serial in serials]
+        if not filtered:
+            raise ValueError(
+                "Requested camera serials not found in deployment.py config. "
+                f"Available: {[cfg.serial for cfg in config.camera_configs]}"
+            )
+        config.camera_configs = filtered
+    if args.calib:
+        print(f"Loaded calibration: {args.calib}")
+        print(f"Camera serials: {[cfg.serial for cfg in config.camera_configs]}")
     if args.manual_seed:
         config.segmentation.xmem_init_with_sam = False
         if config.segmentation.backend.lower() != "xmem":
             raise ValueError("--manual-seed requires segmentation.backend == 'xmem'")
+    frame_label = "TIP" if config.tcp_offset_in_code else "FLANGE"
+    print(f"FRAME = {frame_label}")
     if any(cfg.serial.startswith("CAMERA_SERIAL") for cfg in config.camera_configs):
         raise ValueError("Please update camera serials and T_world_camera in deployment.py")
 
     if args.collect_demo:
-        deployment = InstantPolicyDeployment(config, load_model=False)
+        if args.go_home:
+            _go_home(args, config.robot_ip)
+        deployment = InstantPolicyDeployment(config, load_model=False, debug_gripper=args.debug_gripper)
+        if args.open_gripper:
+            _open_gripper(deployment.control, config)
         if args.manual_seed and config.segmentation.enable:
             manual_seed_xmem(
                 deployment.perception,
@@ -104,7 +285,11 @@ def main():
         print(f"Saved demo to {args.demo_out}")
         return
 
-    deployment = InstantPolicyDeployment(config)
+    if args.go_home:
+        _go_home(args, config.robot_ip)
+    deployment = InstantPolicyDeployment(config, debug_gripper=args.debug_gripper)
+    if args.open_gripper:
+        _open_gripper(deployment.control, config)
     if args.manual_seed and config.segmentation.enable:
         manual_seed_xmem(
             deployment.perception,

@@ -47,7 +47,7 @@ class GripperConfig:
 @dataclass
 class RTDEControlConfig:
     frequency_hz: int = 500
-    control_mode: str = "moveL"  # moveL or servoL
+    control_mode: str = "servoL"  # moveL or servoL
     move_speed: float = 0.1
     move_acceleration: float = 0.5
     servo_speed: float = 0.1
@@ -65,7 +65,7 @@ class DeploymentConfig:
     num_demos: int = 2
     num_traj_wp: int = 10
     max_execution_steps: int = 100
-    num_diffusion_iters: int = 4
+    num_diffusion_iters: int = 8
     pcd_num_points: int = 2048
     pcd_voxel_size: Optional[float] = None
     safety: Optional[SafetyLimits] = None
@@ -74,3 +74,8 @@ class DeploymentConfig:
     gripper: GripperConfig = field(default_factory=GripperConfig)
     device: Optional[str] = None
     execute_until_grip_change: bool = True
+    show_masks: bool = False
+    tcp_offset_in_code: bool = False
+    tcp_offset_m: np.ndarray = field(default_factory=lambda: np.array([-0.000, 0.000, 0.162], dtype=np.float64))
+    debug_frame_sanity: bool = False
+    debug_frame_every: int = 1

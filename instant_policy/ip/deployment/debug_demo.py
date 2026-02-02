@@ -54,6 +54,44 @@ def _pose_sanity(T_w_es: Sequence[np.ndarray]) -> None:
     print("pose[0] det:", det, "ortho_err:", ortho)
 
 
+def _rotation_angle(R_rel: np.ndarray) -> float:
+    trace = np.clip((np.trace(R_rel) - 1.0) / 2.0, -1.0, 1.0)
+    return float(np.degrees(np.arccos(trace)))
+
+
+def _delta_stats(T_w_es: Sequence[np.ndarray]) -> None:
+    if len(T_w_es) < 2:
+        return
+    trans = []
+    rots = []
+    for i in range(len(T_w_es) - 1):
+        T0 = np.asarray(T_w_es[i])
+        T1 = np.asarray(T_w_es[i + 1])
+        t0 = T0[:3, 3]
+        t1 = T1[:3, 3]
+        trans.append(float(np.linalg.norm(t1 - t0)))
+        R_rel = T0[:3, :3].T @ T1[:3, :3]
+        rots.append(_rotation_angle(R_rel))
+    trans = np.asarray(trans)
+    rots = np.asarray(rots)
+    print("step translation (m) min/mean/max:", trans.min(), trans.mean(), trans.max())
+    print("step translation (m) 95%:", np.quantile(trans, 0.95))
+    print("step rotation (deg) min/mean/max:", rots.min(), rots.mean(), rots.max())
+    print("step rotation (deg) 95%:", np.quantile(rots, 0.95))
+
+
+def _grip_stats(grips: Sequence[float]) -> None:
+    if not grips:
+        return
+    g = np.asarray(grips, dtype=float)
+    if len(g) < 2:
+        print("grip values:", float(g[0]))
+        return
+    dg = np.abs(np.diff(g))
+    print("grip min/mean/max:", g.min(), g.mean(), g.max())
+    print("grip delta min/mean/max:", dg.min(), dg.mean(), dg.max())
+
+
 def _compute_bounds(points: np.ndarray) -> None:
     print("pcd bounds min:", points.min(axis=0), "max:", points.max(axis=0))
     for i, axis in enumerate("xyz"):
@@ -99,6 +137,8 @@ def main():
     print("frames:", len(pcds), "poses:", len(T_w_es), "grips:", len(grips))
     _stats_summary(pcds)
     _pose_sanity(T_w_es)
+    _delta_stats(T_w_es)
+    _grip_stats(grips)
 
     valid_pcds = [np.asarray(p) for p in pcds if p is not None and len(p) > 0]
     if not valid_pcds:

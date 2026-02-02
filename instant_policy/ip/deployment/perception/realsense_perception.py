@@ -64,6 +64,7 @@ class RealSensePerception:
         self._segmenter = segmenter
         self._voxel_size = voxel_size
         self._cameras = []
+        self._last_debug_frames = []
 
         for cam in camera_configs:
             pipeline = rs.pipeline()
@@ -131,6 +132,7 @@ class RealSensePerception:
         use_segmentation: bool = False,
     ) -> np.ndarray:
         all_points = []
+        self._last_debug_frames = []
         segmenter_masks = None
         if use_segmentation and segmentation_masks is None and self._segmenter is not None:
             if hasattr(self._segmenter, "get_masks"):
@@ -167,6 +169,14 @@ class RealSensePerception:
             if mask is not None:
                 depth = depth * mask.astype(np.float32)
 
+            self._last_debug_frames.append(
+                {
+                    "camera_index": idx,
+                    "rgb": color,
+                    "mask": mask,
+                }
+            )
+
             xyz_cam = _get_xyz(depth, cam.K).T
             valid = np.isfinite(xyz_cam).all(axis=1) & (xyz_cam[:, 2] > 0)
             xyz_cam = xyz_cam[valid]
@@ -181,6 +191,9 @@ class RealSensePerception:
         if self._voxel_size and o3d is not None:
             pcd = self._voxel_downsample(pcd, self._voxel_size)
         return pcd.astype(np.float32)
+
+    def get_last_debug_frames(self):
+        return list(self._last_debug_frames)
 
     @staticmethod
     def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
