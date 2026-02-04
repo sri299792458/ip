@@ -1,5 +1,7 @@
 import pickle
+import time
 from typing import Iterable, List, Optional
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -34,6 +36,9 @@ class InstantPolicyDeployment:
         self.state = state
         self.control = control
         self._debug_gripper = debug_gripper
+        self._pcd_viz = None
+        self._pcd_handle = None
+        self._pcd_last_ts = 0.0
 
         if self.perception is None:
             if not config.camera_configs:
@@ -93,6 +98,8 @@ class InstantPolicyDeployment:
                 config.num_diffusion_iters,
                 config.device,
             )
+        if self.config.show_live_pcd:
+            self._init_live_pcd_viewer()
 
     def _load_model(self, model_path: str, num_demos: int, num_diffusion_iters: int, device: Optional[str]):
         config = pickle.load(open(f"{model_path}/config.pkl", "rb"))
@@ -120,7 +127,12 @@ class InstantPolicyDeployment:
                 prepared.append(demo)
             else:
                 prepared.append(
-                    sample_to_cond_demo(demo, self.config.num_traj_wp, num_points=self.config.pcd_num_points)
+                    sample_to_cond_demo(
+                        demo,
+                        self.config.num_traj_wp,
+                        num_points=self.config.pcd_num_points,
+                        require_grip_objs=True,
+                    )
                 )
         if len(prepared) < self.model_config["num_demos"]:
             if not prepared:
@@ -141,77 +153,131 @@ class InstantPolicyDeployment:
         device = torch.device(self.model_config["device"])
         device_type = device.type
 
-        for k in range(max_steps):
-            T_w_e = self.state.get_T_w_e()
-            grip_raw = self.state.get_gripper_state()
-            grip = 1.0 if grip_raw >= 0.5 else 0.0  # 1=open, 0=closed
-            pcd_w = self.perception.capture_pcd_world(use_segmentation=self.config.segmentation.enable)
-            if self.config.show_masks:
-                self._show_masks()
-            if pcd_w.size == 0:
-                print("Empty point cloud, skipping step")
-                continue
+        record = None
+        record_out = None
+        if getattr(self.config, "record_live_pcd", False):
+            record = {"pcds": [], "T_w_es": [], "grips": []}
+            record_out = Path(getattr(self.config, "record_live_pcd_out", "live_pcd_recording.pkl"))
+            record_out.parent.mkdir(parents=True, exist_ok=True)
 
-            pcd_ee = transform_pcd(
-                subsample_pcd(pcd_w, num_points=self.config.pcd_num_points),
-                np.linalg.inv(T_w_e),
-            )
-            if self.config.debug_frame_sanity and (k % self.config.debug_frame_every == 0):
-                self._print_frame_sanity(T_w_e, pcd_ee)
+        try:
+            for k in range(max_steps):
+                T_w_e = self.state.get_T_w_e()
+                grip_obj = self.state.get_gripper_obj_state(require=True)
+                grip = 0.0 if grip_obj in {1, 2} else 1.0  # 1=open, 0=closed (OBJ: 1/2=contact)
+                grip_raw = None
+                pcd_w = self.perception.capture_pcd_world(use_segmentation=self.config.segmentation.enable)
+                if self.config.show_masks:
+                    self._show_masks()
+                if pcd_w.size == 0:
+                    print("Empty point cloud, skipping step")
+                    continue
 
-            full_sample["live"] = {
-                "obs": [pcd_ee],
-                "grips": [grip],
-                "T_w_es": [T_w_e],
-                "actions": [T_w_e.reshape(1, 4, 4).repeat(pred_horizon, axis=0)],
-                "actions_grip": [np.zeros(pred_horizon)],
-            }
-            data = save_sample(full_sample, None)
+                pcd_ee = transform_pcd(
+                    subsample_pcd(pcd_w, num_points=self.config.pcd_num_points),
+                    np.linalg.inv(T_w_e),
+                )
+                if getattr(self.config, "show_live_pcd", False):
+                    self._show_live_pcd(pcd_ee)
+                if self.config.debug_frame_sanity and (k % self.config.debug_frame_every == 0):
+                    self._print_frame_sanity(T_w_e, pcd_ee)
 
-            if k == 0:
-                self._demo_embds, self._demo_pos = self.model.model.get_demo_scene_emb(data.to(device))
+                if record is not None and (k % max(1, int(getattr(self.config, "record_live_pcd_every", 1))) == 0):
+                    record["pcds"].append(np.asarray(pcd_ee, dtype=np.float32))
+                    record["T_w_es"].append(np.asarray(T_w_e, dtype=np.float64))
+                    record["grips"].append(float(grip))
 
-            data.live_scene_node_embds, data.live_scene_node_pos = self.model.model.get_live_scene_emb(data.to(device))
-            data.demo_scene_node_embds = self._demo_embds.clone()
-            data.demo_scene_node_pos = self._demo_pos.clone()
+                full_sample["live"] = {
+                    "obs": [pcd_ee],
+                    "grips": [grip],
+                    "T_w_es": [T_w_e],
+                    "actions": [T_w_e.reshape(1, 4, 4).repeat(pred_horizon, axis=0)],
+                    "actions_grip": [np.zeros(pred_horizon)],
+                }
+                data = save_sample(full_sample, None)
 
-            with torch.no_grad():
-                if device_type == "cuda":
-                    with torch.autocast(device_type="cuda", dtype=torch.float32):
+                if k == 0:
+                    self._demo_embds, self._demo_pos = self.model.model.get_demo_scene_emb(data.to(device))
+
+                data.live_scene_node_embds, data.live_scene_node_pos = self.model.model.get_live_scene_emb(data.to(device))
+                data.demo_scene_node_embds = self._demo_embds.clone()
+                data.demo_scene_node_pos = self._demo_pos.clone()
+
+                with torch.no_grad():
+                    if device_type == "cuda":
+                        with torch.autocast(device_type="cuda", dtype=torch.float32):
+                            actions, grips = self.model.test_step(data.to(device), 0)
+                    else:
                         actions, grips = self.model.test_step(data.to(device), 0)
-                else:
-                    actions, grips = self.model.test_step(data.to(device), 0)
-                actions = actions.squeeze().cpu().numpy()
-                grips = grips.squeeze().cpu().numpy()
+                    actions = actions.squeeze().cpu().numpy()
+                    grips = grips.squeeze().cpu().numpy()
 
-            print("Policy output actions (first 3):")
-            for idx in range(min(3, len(actions))):
-                print(f"  [{idx}] T_e_e_rel:\n{actions[idx]}")
-            state_label = "open" if grip >= 0.5 else "closed"
-            print(f"Current gripper raw={grip_raw:.3f} bin={grip} ({state_label})")
-            print("Policy output grips (first 8):", grips[: min(8, len(grips))])
-            if self._debug_gripper:
-                grip_cmds = (grips + 1.0) / 2.0
-                grip_bins = (grip_cmds >= 0.5).astype(int)
-                flips = int(np.sum(np.abs(np.diff(grip_bins[:pred_horizon]))))
-                print("Policy grip cmds (first 8):", np.round(grip_cmds[: min(8, len(grip_cmds))], 3))
-                print("Policy grip bins (first 8):", grip_bins[: min(8, len(grip_bins))].tolist())
-                print(f"Pred horizon grip flips: {flips}")
+                print("Policy output actions (first 3):")
+                for idx in range(min(3, len(actions))):
+                    print(f"  [{idx}] T_e_e_rel:\n{actions[idx]}")
+                state_label = "open" if grip >= 0.5 else "closed"
+                print(f"Current gripper obj={grip_obj} bin={grip} ({state_label})")
+                print("Policy output grips (first 8):", grips[: min(8, len(grips))])
+                if self._debug_gripper:
+                    grip_cmds = (grips + 1.0) / 2.0
+                    grip_bins = (grip_cmds >= 0.5).astype(int)
+                    flips = int(np.sum(np.abs(np.diff(grip_bins[:pred_horizon]))))
+                    print("Policy grip cmds (first 8):", np.round(grip_cmds[: min(8, len(grip_cmds))], 3))
+                    print("Policy grip bins (first 8):", grip_bins[: min(8, len(grip_bins))].tolist())
+                    print(f"Pred horizon grip flips: {flips}")
 
-            step_horizon = execution_horizon
-            if step_horizon == pred_horizon and self.config.execute_until_grip_change:
-                step_horizon = self._horizon_until_grip_change(grips, grip, pred_horizon)
-            print(f"Step horizon: {step_horizon}/{pred_horizon} (execute_until_grip_change={self.config.execute_until_grip_change})")
+                step_horizon = execution_horizon
+                if step_horizon == pred_horizon and self.config.execute_until_grip_change:
+                    step_horizon = self._horizon_until_grip_change(grips, grip, pred_horizon)
+                print(f"Step horizon: {step_horizon}/{pred_horizon} (execute_until_grip_change={self.config.execute_until_grip_change})")
 
-            success, steps, error = self.executor.execute_actions(
-                actions, grips, T_w_e, horizon=step_horizon
-            )
-            if not success:
-                print(f"Execution failed at step {k}: {error}")
-                return False
+                success, steps, error = self.executor.execute_actions(
+                    actions, grips, T_w_e, horizon=step_horizon
+                )
+                if not success:
+                    print(f"Execution failed at step {k}: {error}")
+                    return False
 
-            print(f"Step {k}: executed {steps} actions")
-        return True
+                print(f"Step {k}: executed {steps} actions")
+            return True
+        finally:
+            if record is not None and record_out is not None and record["pcds"]:
+                with record_out.open("wb") as f:
+                    pickle.dump(record, f)
+                print(f"[record] Saved live policy-frame PCDs to {record_out}")
+
+    def _init_live_pcd_viewer(self) -> None:
+        try:
+            import viser
+        except Exception:
+            print("[warn] Viser is not available; live PCD viewer disabled.")
+            self.config.show_live_pcd = False
+            return
+
+        self._pcd_viz = viser.ViserServer()
+        self._pcd_viz.scene.world_axes.visible = True
+        self._pcd_handle = self._pcd_viz.scene.add_point_cloud(
+            "/live/pcd",
+            points=np.zeros((0, 3), dtype=np.float32),
+            colors=(80, 220, 120),
+            point_size=0.003,
+            point_shape="square",
+        )
+
+    def _show_live_pcd(self, pcd_ee: np.ndarray) -> None:
+        if self._pcd_viz is None or self._pcd_handle is None:
+            return
+        now = time.time()
+        hz = float(getattr(self.config, "show_live_pcd_hz", 10.0))
+        if hz > 0 and now - self._pcd_last_ts < 1.0 / hz:
+            return
+        self._pcd_last_ts = now
+
+        if pcd_ee is None or pcd_ee.size == 0:
+            points = np.zeros((0, 3), dtype=np.float32)
+        else:
+            points = np.asarray(pcd_ee, dtype=np.float32)
+        self._pcd_handle.points = points
 
     def _show_masks(self) -> None:
         try:

@@ -136,10 +136,36 @@ def _open_gripper(control, config: DeploymentConfig) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Instant Policy deployment on UR5e (RTDE)")
     parser.add_argument("--robot-ip", default=None, help="UR5e IP address (default: config.robot_ip)")
-    parser.add_argument("--demo", action="append", default=[], help="Path to a demo pickle file")
+    parser.add_argument(
+        "--demo",
+        action="append",
+        nargs="+",
+        default=[],
+        metavar="DEMO",
+        help=(
+            "One or more demo .pkl paths. Can be repeated. "
+            "Tip: you can use shell globs, e.g. --demo demos/task1_demo*.pkl"
+        ),
+    )
     parser.add_argument("--collect-demo", action="store_true", help="Collect a kinesthetic demo and exit")
     parser.add_argument("--demo-out", default="demo.pkl", help="Output path for collected demo")
     parser.add_argument("--task-name", default="task", help="Task name for demo collection")
+    parser.add_argument(
+        "--debug-demo-waypoints",
+        action="store_true",
+        help="Save RGB images for the selected waypoint frames during demo collection.",
+    )
+    parser.add_argument(
+        "--debug-demo-waypoints-dir",
+        default="ip/deployment/debug_waypoints",
+        help="Output dir for waypoint debug images (used with --debug-demo-waypoints).",
+    )
+    parser.add_argument(
+        "--debug-demo-waypoints-num",
+        type=int,
+        default=None,
+        help="Number of waypoint frames to export (default: config.num_traj_wp).",
+    )
     parser.add_argument(
         "--camera-serial",
         action="append",
@@ -155,16 +181,14 @@ def main():
         help="Calibration JSON to auto-load (default: left arm calibration)",
     )
     parser.add_argument(
-        "--execute-until-grip-change",
-        action="store_true",
-        dest="execute_until_grip_change",
-        help="Execute predicted actions until gripper state changes (recommended).",
-    )
-    parser.add_argument(
-        "--no-grip-horizon",
-        action="store_false",
-        dest="execute_until_grip_change",
-        help="Always execute the full action horizon (may cause gripper oscillation).",
+        "--horizon-mode",
+        choices=["until-grip-change", "full"],
+        default="until-grip-change",
+        help=(
+            "How many predicted actions to execute per control step: "
+            "'until-grip-change' executes until the predicted gripper state flips (recommended), "
+            "'full' always executes the full prediction horizon."
+        ),
     )
     parser.add_argument(
         "--no-home",
@@ -184,21 +208,32 @@ def main():
         help="Skip opening the gripper before starting",
     )
     parser.add_argument(
-        "--show-masks",
-        action="store_true",
-        help="Show live RGB/mask overlay windows from the policy camera(s).",
+        "--viz",
+        choices=["none", "masks", "pcd", "both"],
+        default="none",
+        help="Debug visualization: 'masks', 'pcd' (policy-frame), or 'both'.",
     )
     parser.add_argument(
-        "--tcp-offset-in-code",
-        action="store_true",
-        dest="tcp_offset_in_code",
-        help="Apply TCP offset in code (tip frame).",
+        "--viz-hz",
+        type=float,
+        default=None,
+        help="Live PCD update rate (Hz) for the viewer (default: config.show_live_pcd_hz).",
     )
     parser.add_argument(
-        "--no-tcp-offset-in-code",
-        action="store_false",
-        dest="tcp_offset_in_code",
-        help="Do not apply TCP offset in code (flange frame).",
+        "--record-live-pcd",
+        action="store_true",
+        help="Record live policy-frame point clouds to a .pkl (uses config defaults for path/stride).",
+    )
+    parser.add_argument(
+        "--frame",
+        choices=["flange", "tip"],
+        default="flange",
+        help=(
+            "End-effector frame convention: "
+            "'flange' uses the RTDE-reported TCP pose as-is, "
+            "'tip' applies --tcp-offset-m in code. "
+            "Default: flange."
+        ),
     )
     parser.add_argument(
         "--tcp-offset-m",
@@ -224,21 +259,31 @@ def main():
         default=1,
         help="Print frame sanity every N steps (default: 1, only used with --debug-frame-sanity).",
     )
-    parser.set_defaults(execute_until_grip_change=True)
     parser.set_defaults(open_gripper=True)
     parser.set_defaults(go_home=True)
-    parser.set_defaults(tcp_offset_in_code=None)
     args = parser.parse_args()
+
+    # Flatten --demo which is a list of lists due to nargs="+".
+    demo_paths = []
+    for item in args.demo:
+        if isinstance(item, (list, tuple)):
+            demo_paths.extend(item)
+        else:
+            demo_paths.append(item)
+    args.demo = demo_paths
 
     config = _build_default_config()
     if args.robot_ip:
         config.robot_ip = args.robot_ip
     if args.calib:
         _apply_calibration_json(config, Path(args.calib))
-    config.execute_until_grip_change = args.execute_until_grip_change
-    config.show_masks = args.show_masks
-    if args.tcp_offset_in_code is not None:
-        config.tcp_offset_in_code = args.tcp_offset_in_code
+    config.execute_until_grip_change = args.horizon_mode == "until-grip-change"
+    config.show_masks = args.viz in {"masks", "both"}
+    config.show_live_pcd = args.viz in {"pcd", "both"}
+    if args.viz_hz is not None:
+        config.show_live_pcd_hz = float(args.viz_hz)
+    config.record_live_pcd = args.record_live_pcd
+    config.tcp_offset_in_code = args.frame == "tip"
     if args.tcp_offset_m is not None:
         config.tcp_offset_m = np.array(args.tcp_offset_m, dtype=np.float64)
     config.debug_frame_sanity = args.debug_frame_sanity
@@ -280,7 +325,16 @@ def main():
         raw_demo = collector.collect_kinesthetic(
             args.task_name,
             use_segmentation=config.segmentation.enable,
+            debug_waypoints=args.debug_demo_waypoints,
         )
+        if args.debug_demo_waypoints:
+            num_wp = args.debug_demo_waypoints_num or config.num_traj_wp
+            collector.save_waypoint_debug_images(
+                raw_demo,
+                args.debug_demo_waypoints_dir,
+                num_traj_wp=num_wp,
+            )
+            raw_demo.pop("_debug_rgb", None)
         collector.save_demo(raw_demo, args.demo_out)
         print(f"Saved demo to {args.demo_out}")
         return

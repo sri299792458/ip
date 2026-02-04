@@ -45,6 +45,7 @@ def _get_K(intrinsics) -> np.ndarray:
 
 @dataclass
 class _CameraHandle:
+    serial: str
     pipeline: "rs.pipeline"
     align: Optional["rs.align"]
     K: np.ndarray
@@ -88,6 +89,7 @@ class RealSensePerception:
 
             self._cameras.append(
                 _CameraHandle(
+                    serial=cam.serial,
                     pipeline=pipeline,
                     align=align,
                     K=K,
@@ -172,6 +174,7 @@ class RealSensePerception:
             self._last_debug_frames.append(
                 {
                     "camera_index": idx,
+                    "serial": cam.serial,
                     "rgb": color,
                     "mask": mask,
                 }

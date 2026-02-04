@@ -11,6 +11,7 @@ class RobotiqGripper:
     FOR = "FOR"
     SPE = "SPE"
     POS = "POS"
+    OBJ = "OBJ"
     STA = "STA"
 
     def __init__(
@@ -120,3 +121,24 @@ class RobotiqGripper:
         if denom <= 0:
             return None
         return (pos - self._open_position) / denom
+
+    def get_status(self) -> Optional[int]:
+        """Return gripper status (STA) if available."""
+        try:
+            return self._get_var(self.STA)
+        except Exception:
+            return None
+
+    def get_object_status(self) -> Optional[int]:
+        """Return object detection status (OBJ) if available.
+
+        Typical Robotiq meanings:
+          0 = moving
+          1 = stopped on outer contact
+          2 = stopped on inner contact
+          3 = at requested position (no object)
+        """
+        try:
+            return self._get_var(self.OBJ)
+        except Exception:
+            return None

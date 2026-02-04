@@ -54,3 +54,16 @@ class URRTDEState:
             return default
         # Map Robotiq normalized position (0=open, 1=closed) to model convention (1=open, 0=closed).
         return float(1.0 - pos)
+
+    def get_gripper_obj_state(self, require: bool = False) -> Optional[int]:
+        if self._gripper is None:
+            if require:
+                raise RuntimeError("Robotiq gripper is not available for OBJ feedback.")
+            return None
+        try:
+            obj = self._gripper.get_object_status()
+        except Exception:
+            obj = None
+        if obj is None and require:
+            raise RuntimeError("Robotiq OBJ feedback is required but missing.")
+        return None if obj is None else int(obj)

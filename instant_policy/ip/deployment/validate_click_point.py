@@ -109,15 +109,10 @@ def main():
     parser.add_argument("--move-speed", type=float, default=0.1, help="moveL speed (m/s)")
     parser.add_argument("--move-acceleration", type=float, default=0.5, help="moveL acceleration (m/s^2)")
     parser.add_argument(
-        "--tcp-offset-in-code",
-        action="store_true",
-        help="Apply TCP offset in code (default: enabled).",
-    )
-    parser.add_argument(
-        "--no-tcp-offset-in-code",
-        action="store_false",
-        dest="tcp_offset_in_code",
-        help="Disable TCP offset in code (use if robot TCP is set to gripper).",
+        "--frame",
+        choices=["flange", "tip"],
+        default="flange",
+        help="End-effector frame convention for interpreting robot TCP pose.",
     )
     parser.add_argument(
         "--tcp-offset-m",
@@ -125,7 +120,7 @@ def main():
         nargs=3,
         default=None,
         metavar=("X", "Y", "Z"),
-        help="TCP offset in meters (default: 0 0 0.162 if --tcp-offset-in-code).",
+        help="TCP offset in meters (only used when --frame tip; default: 0 0 0.162).",
     )
     parser.add_argument(
         "--approach-z-offset",
@@ -133,7 +128,6 @@ def main():
         default=0.0,
         help="Optional Z offset (meters) to approach above the point before final move.",
     )
-    parser.set_defaults(tcp_offset_in_code=False)
     args = parser.parse_args()
 
     T_world_camera = _load_T_world_camera(Path(args.calib), args.serial)
@@ -145,8 +139,9 @@ def main():
 
     rtde_state = None
     control = None
+    tcp_offset_in_code = args.frame == "tip"
     tcp_offset = None
-    if args.tcp_offset_in_code:
+    if tcp_offset_in_code:
         tcp_offset = np.array([0.0, 0.0, 0.162], dtype=np.float64)
         if args.tcp_offset_m is not None:
             tcp_offset = np.array(args.tcp_offset_m, dtype=np.float64)
@@ -169,12 +164,12 @@ def main():
         control = URRTDEControl(
             rtde_control,
             rtde_cfg,
-            tcp_offset_in_code=args.tcp_offset_in_code,
+            tcp_offset_in_code=tcp_offset_in_code,
             tcp_offset_m=tcp_offset,
         )
         rtde_state = URRTDEState(
             rtde,
-            tcp_offset_in_code=args.tcp_offset_in_code,
+            tcp_offset_in_code=tcp_offset_in_code,
             tcp_offset_m=tcp_offset,
         )
 

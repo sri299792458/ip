@@ -75,6 +75,11 @@ class DeploymentConfig:
     device: Optional[str] = None
     execute_until_grip_change: bool = True
     show_masks: bool = False
+    show_live_pcd: bool = False
+    show_live_pcd_hz: float = 10.0
+    record_live_pcd: bool = False
+    record_live_pcd_out: str = "ip/deployment/live_pcd_recording.pkl"
+    record_live_pcd_every: int = 1
     tcp_offset_in_code: bool = False
     tcp_offset_m: np.ndarray = field(default_factory=lambda: np.array([-0.000, 0.000, 0.162], dtype=np.float64))
     debug_frame_sanity: bool = False

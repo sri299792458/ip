@@ -26,7 +26,15 @@ def main():
     if not T_w_es or not grips:
         raise RuntimeError("Demo must contain T_w_es and grips.")
 
-    waypoints = extract_waypoints(np.array(T_w_es), np.array(grips), args.num_waypoints)
+    grip_objs = demo.get("grip_objs", None)
+    grip_objs = np.array(grip_objs) if grip_objs is not None else None
+    waypoints = extract_waypoints(
+        np.array(T_w_es),
+        np.array(grips),
+        args.num_waypoints,
+        grip_objs=grip_objs,
+        require_grip_objs=True,
+    )
     print(f"Total frames: {len(T_w_es)}")
     print(f"Num waypoints: {args.num_waypoints}")
     print("Waypoint indices:", waypoints)

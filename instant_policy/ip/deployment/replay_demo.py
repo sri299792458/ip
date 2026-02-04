@@ -81,16 +81,10 @@ def main():
     parser.add_argument("--max-translation", type=float, default=0.01, help="Max translation per step (m)")
     parser.add_argument("--max-rotation-deg", type=float, default=3.0, help="Max rotation per step (deg)")
     parser.add_argument(
-        "--tcp-offset-in-code",
-        action="store_true",
-        dest="tcp_offset_in_code",
-        help="Apply TCP offset in code (tip frame).",
-    )
-    parser.add_argument(
-        "--no-tcp-offset-in-code",
-        action="store_false",
-        dest="tcp_offset_in_code",
-        help="Do not apply TCP offset in code (flange frame).",
+        "--frame",
+        choices=["flange", "tip"],
+        default="flange",
+        help="End-effector frame convention: flange (default) or tip (apply TCP offset in code).",
     )
     parser.add_argument(
         "--tcp-offset-m",
@@ -98,7 +92,7 @@ def main():
         nargs=3,
         default=None,
         metavar=("X", "Y", "Z"),
-        help="TCP offset in meters (default: 0 0 0.162 if --tcp-offset-in-code).",
+        help="TCP offset in meters (only used when --frame tip; default: 0 0 0.162).",
     )
     parser.add_argument("--use-gripper", action="store_true", help="Replay gripper commands from demo")
     parser.add_argument("--debug-gripper", action="store_true", help="Print gripper commands during replay")
@@ -108,7 +102,6 @@ def main():
     parser.add_argument("--gripper-closed", type=int, default=255)
     parser.add_argument("--gripper-speed", type=int, default=255)
     parser.add_argument("--gripper-force", type=int, default=100)
-    parser.set_defaults(tcp_offset_in_code=False)
     args = parser.parse_args()
 
     demo = _load_demo(Path(args.demo))
@@ -122,8 +115,10 @@ def main():
     if not idxs:
         raise RuntimeError("No frames in selected range.")
 
+    tcp_offset_in_code = args.frame == "tip"
+
     tcp_offset = None
-    if args.tcp_offset_in_code:
+    if tcp_offset_in_code:
         tcp_offset = np.array([0.0, 0.0, 0.162], dtype=np.float64)
         if args.tcp_offset_m is not None:
             tcp_offset = np.array(args.tcp_offset_m, dtype=np.float64)
@@ -168,13 +163,13 @@ def main():
             speed=args.gripper_speed,
             force=args.gripper_force,
         ),
-        tcp_offset_in_code=args.tcp_offset_in_code,
+        tcp_offset_in_code=tcp_offset_in_code,
         tcp_offset_m=tcp_offset,
     )
     state = URRTDEState(
         rtde_receive_iface,
         gripper=gripper,
-        tcp_offset_in_code=args.tcp_offset_in_code,
+        tcp_offset_in_code=tcp_offset_in_code,
         tcp_offset_m=tcp_offset,
     )
     safety = SafetyLimits(
@@ -183,7 +178,7 @@ def main():
     )
     executor = ActionExecutor(control, state, safety=safety, debug_gripper=False)
 
-    frame_label = "TIP" if args.tcp_offset_in_code else "FLANGE"
+    frame_label = "TIP" if tcp_offset_in_code else "FLANGE"
     print(f"FRAME = {frame_label}")
     print(f"Replaying {len(idxs)} frames (stride={args.stride}).")
 

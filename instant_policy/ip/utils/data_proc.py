@@ -1,6 +1,6 @@
 import numpy as np
 import open3d as o3d
-from scipy.spatial.transform import Rotation as Rot
+from scipy.spatial.transform import Rotation as Rot, Slerp
 from ip.utils.common_utils import transform_pcd
 import torch
 from torch_geometric.data import Data
@@ -82,10 +82,16 @@ def save_sample(sample, save_dir=None, offset=0, scene_encoder=None):
             return data
 
 
-def sample_to_cond_demo(sample, num_waypoints, num_points=2048):
-    traj_indices = extract_waypoints(np.array(sample['T_w_es']),
-                                     np.array(sample['grips']),
-                                     num_waypoints=num_waypoints)
+def sample_to_cond_demo(sample, num_waypoints, num_points=2048, require_grip_objs: bool = False):
+    grip_objs = sample.get("grip_objs", None)
+    grip_objs = np.array(grip_objs) if grip_objs is not None else None
+    traj_indices = extract_waypoints(
+        np.array(sample['T_w_es']),
+        np.array(sample['grips']),
+        num_waypoints=num_waypoints,
+        grip_objs=grip_objs,
+        require_grip_objs=require_grip_objs,
+    )
 
     pcds = [transform_pcd(subsample_pcd(sample['pcds'][idx], num_points),
                           np.linalg.inv(sample['T_w_es'][idx])) for idx in traj_indices]
@@ -180,45 +186,159 @@ def subsample_traj(traj, grips, pcds=None, trans_space=0.01, rot_space=3):
     return subsampled_traj, subsampled_grips
 
 
-def extract_waypoints(traj, traj_states, num_waypoints):
-    waypoints = [0, len(traj) - 1]
-    # Add all waypoints where traj state changes.
-    for i in range(1, len(traj_states) - 2):
-        if traj_states[i] != traj_states[i - 1] and i not in waypoints:
-            waypoints.append(i)
-    waypoints.sort()
-    # Add more waypoints where the trajectory is close to the previous waypoint to smooth out the trajectory.
-    for i in range(1, len(traj_states)):
-        err = pose_error(traj[i], traj[i - 1], rot_scale=1)
-        closest_waypoint = np.argmin([abs(i - w) for w in waypoints])
-        if err < 3.5e-3 and abs(i - waypoints[closest_waypoint]) > 5 and (len(waypoints) < num_waypoints): # if waypoints are enough, skip this.
-            waypoints.append(i)
+def extract_waypoints(traj, traj_states, num_waypoints, grip_objs=None, require_grip_objs: bool = False):
+    """Select L waypoints from a demo trajectory.
 
-    waypoints.sort()
-    wp_to_add = max(0, num_waypoints - len(waypoints)) # If there are still too few waypoints, add some. Otherwise, exit.
-    if wp_to_add == 0:
-        return waypoints
+    First-principles approach inspired by Automatic Waypoint Extraction (AWE):
+      - Treat a segment as valid if linear interpolation (SE(3)) approximates it within error.
+      - Use event anchors (gripper open/close transitions) as mandatory.
+      - Greedily split the segment with the highest interpolation error until L waypoints are reached.
+    """
 
-    wp_segment_dist = [pose_error(traj[waypoints[i]], traj[waypoints[i + 1]], rot_scale=1) for i in
-                       range(len(waypoints) - 1)]
-    wp_segment_dist = np.array(wp_segment_dist) / np.sum(wp_segment_dist)
-    extra_wp_segments = np.ceil(wp_segment_dist * wp_to_add).astype(int)
+    n = len(traj)
+    if n == 0:
+        return []
 
-    seg_order = np.argsort(extra_wp_segments)[::-1]
-    for ii in range(len(extra_wp_segments)):
-        i = seg_order[ii]
-        wp_a = waypoints[i]
-        wp_b = waypoints[i + 1]
-        for j in range(extra_wp_segments[i]):
-            waypoints.append(wp_a + (wp_b - wp_a) * (j + 1) // (extra_wp_segments[i] + 1))
-            if len(waypoints) == num_waypoints:
+    if require_grip_objs:
+        if grip_objs is None or len(grip_objs) != n or any(obj is None for obj in grip_objs):
+            raise ValueError(
+                "grip_objs is required for waypoint extraction. "
+                "Re-record the demo with Robotiq OBJ feedback enabled."
+            )
+
+    if n <= num_waypoints:
+        return list(range(n)) + [n - 1] * (num_waypoints - n)
+
+    # Build gripper state from OBJ (debounced) if available.
+    if grip_objs is not None and len(grip_objs) == n and all(obj is not None for obj in grip_objs):
+        raw = []
+        for obj in grip_objs:
+            obj_i = int(obj)
+            if obj_i in {1, 2}:
+                raw.append(0)
+            elif obj_i == 3:
+                raw.append(1)
+            else:
+                raw.append(None)  # OBJ=0 -> moving/unknown
+
+        k_hold = 2
+        debounced = []
+        state = next((r for r in raw if r is not None), 1)  # default open if unknown
+        cand = None
+        cnt = 0
+        for r in raw:
+            if r is None:
+                debounced.append(state)
+                continue
+            if r == state:
+                cand = None
+                cnt = 0
+                debounced.append(state)
+                continue
+            if cand is None or cand != r:
+                cand = r
+                cnt = 1
+            else:
+                cnt += 1
+            if cnt >= k_hold:
+                state = cand
+                cand = None
+                cnt = 0
+            debounced.append(state)
+        traj_states = np.array(debounced, dtype=np.float64)
+
+    traj_states = np.asarray(traj_states, dtype=np.float64)
+
+    rot_scale = 0.2  # ~1cm per 3deg
+    min_frame_gap = 2
+    min_motion = 3.5e-3
+
+    def _pose_err(Ta: np.ndarray, Tb: np.ndarray) -> float:
+        dist_trans = np.linalg.norm(Ta[:3, 3] - Tb[:3, 3])
+        dist_rot = Rot.from_matrix(Ta[:3, :3] @ Tb[:3, :3].T).magnitude()
+        return float(dist_trans + rot_scale * dist_rot)
+
+    def _segment_error(i: int, j: int):
+        if j - i < 2:
+            return -1.0, None
+        Ta = traj[i]
+        Tb = traj[j]
+        ra = Rot.from_matrix(Ta[:3, :3])
+        rb = Rot.from_matrix(Tb[:3, :3])
+        slerp = Slerp([0.0, 1.0], Rot.from_quat([ra.as_quat(), rb.as_quat()]))
+        max_err = -1.0
+        max_idx = None
+        for k in range(i + 1, j):
+            if k - i < min_frame_gap or j - k < min_frame_gap:
+                continue
+            t = (k - i) / float(j - i)
+            T_interp = np.eye(4, dtype=np.float64)
+            T_interp[:3, 3] = (1.0 - t) * Ta[:3, 3] + t * Tb[:3, 3]
+            T_interp[:3, :3] = slerp([t])[0].as_matrix()
+            err = _pose_err(traj[k], T_interp)
+            if err > max_err:
+                max_err = err
+                max_idx = k
+        return max_err, max_idx
+
+    # Mandatory anchors: start/end, plus gripper change and pre-change frames.
+    anchors = {0, n - 1}
+    change_idxs = []
+    pre_change_idxs = []
+    for i in range(1, n):
+        if traj_states[i] != traj_states[i - 1]:
+            change_idxs.append(i)
+            pre = i - 1
+            if pre >= 0:
+                if abs(i - pre) >= min_frame_gap or _pose_err(traj[i], traj[pre]) >= min_motion:
+                    pre_change_idxs.append(pre)
+
+    anchors.update(change_idxs)
+    anchors.update(pre_change_idxs)
+
+    # If too many anchors, prioritize start/end + change frames.
+    if len(anchors) > num_waypoints:
+        keep = {0, n - 1}
+        change_sorted = sorted(set(change_idxs))
+        budget = max(0, num_waypoints - 2)
+        if change_sorted:
+            if len(change_sorted) <= budget:
+                keep.update(change_sorted)
+            else:
+                picks = np.linspace(0, len(change_sorted) - 1, num=budget)
+                for j in np.unique(np.round(picks).astype(int)).tolist():
+                    keep.add(int(change_sorted[j]))
+        # Add pre-change if room.
+        for idx in pre_change_idxs:
+            if len(keep) >= num_waypoints:
                 break
-        else:
-            continue
-        break
+            keep.add(idx)
+        return sorted(keep)
 
-    waypoints.sort()
-    return waypoints
+    waypoints = sorted(anchors)
+
+    # Greedily split the segment with the highest interpolation error.
+    segments = [(waypoints[i], waypoints[i + 1]) for i in range(len(waypoints) - 1)]
+    while len(waypoints) < num_waypoints:
+        best_err = -1.0
+        best_seg = None
+        best_idx = None
+        for i, j in segments:
+            err, idx = _segment_error(i, j)
+            if idx is None:
+                continue
+            if err > best_err:
+                best_err = err
+                best_seg = (i, j)
+                best_idx = idx
+        if best_idx is None:
+            break
+        waypoints.append(best_idx)
+        waypoints = sorted(set(waypoints))
+        # Rebuild segments.
+        segments = [(waypoints[i], waypoints[i + 1]) for i in range(len(waypoints) - 1)]
+
+    return waypoints[:num_waypoints]
 
 
 def pose_error(T1, T2, rot_scale=0.01):

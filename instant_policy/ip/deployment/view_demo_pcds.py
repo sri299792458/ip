@@ -117,7 +117,15 @@ def main():
         if not T_w_es or not grips:
             raise RuntimeError("Waypoints require T_w_es and grips in the demo.")
         from ip.utils.data_proc import extract_waypoints
-        wp = extract_waypoints(np.array(T_w_es), np.array(grips), num_waypoints=args.num_waypoints or 10)
+        grip_objs = data.get("grip_objs", None)
+        grip_objs = np.array(grip_objs) if grip_objs is not None else None
+        wp = extract_waypoints(
+            np.array(T_w_es),
+            np.array(grips),
+            num_waypoints=args.num_waypoints or 10,
+            grip_objs=grip_objs,
+            require_grip_objs=True,
+        )
         valid_indices = [i for i in valid_indices if i in wp]
 
     start = max(0, args.start)

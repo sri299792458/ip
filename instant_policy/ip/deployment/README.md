@@ -56,6 +56,9 @@ Context consists of N demos, each downsampled to L waypoints:
 - Point clouds must be expressed in EE frame.
 - Actions are relative to the pose at inference time. For step j:
   T_w_e_target_j = T_w_e_initial @ actions[j]
+- Gripper state for waypoint extraction is derived from **Robotiq OBJ** feedback.
+  Demos without `grip_objs` are not supported.
+- Live deployment also uses **Robotiq OBJ** for the current gripper state.
 
 1.5 Training distribution constraints (paper)
 - Per-step translation: approx 0.01 m.
@@ -405,6 +408,12 @@ DeploymentConfig:
 - `pcd_num_points`: default 2048.
 - `pcd_voxel_size`: optional downsample size.
 - `execute_until_grip_change`: True by default.
+- `show_masks`: show live RGB/mask overlays (debug). Set via `--viz masks|both`.
+- `show_live_pcd`: show live point cloud in policy (EE) frame via Viser. Set via `--viz pcd|both`.
+- `show_live_pcd_hz`: update rate (Hz) for the live PCD viewer (CLI: `--viz-hz`).
+- `record_live_pcd`: record live policy-frame PCDs to a .pkl file (CLI: `--record-live-pcd`).
+- `record_live_pcd_out`: output path for live PCD recording (config only).
+- `record_live_pcd_every`: record every N steps (config only).
 
 
 14. Setup and run instructions
@@ -447,7 +456,7 @@ Common failure modes:
    - Switch to servoL for faster streaming.
 
 5) Gripper oscillation:
-   - Ensure execute-until-grip-change is enabled.
+   - Ensure execute_until_grip_change is enabled (deployment CLI: `--horizon-mode until-grip-change`, default).
 
 Sanity checks:
 - Visualize pcd in world and EE frame.

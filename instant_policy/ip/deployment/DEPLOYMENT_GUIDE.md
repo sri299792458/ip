@@ -293,8 +293,9 @@ cp checkpoints/xmem/XMem.pth XMem2-main/saves/
 **Hardware Configuration**
 - Robot gripper: Robotiq 2F-85
 - Gripper TCP offset (Z): `0.162 m` (162 mm)
-  - **Handled in code by default** (`tcp_offset_in_code=True`) since the lab keeps the robot TCP at flange.
-  - If you change the robot TCP to the gripper in the teach pendant, set `tcp_offset_in_code=False` to avoid double-counting.
+  - This is the **tip offset from the flange** along the tool Z axis (used when you want to convert flange poses to tip/contact points).
+  - **Deployment runs in FLANGE frame by default** (`FRAME = FLANGE`, `tcp_offset_in_code=False`, CLI: `--frame flange`).
+  - Only use the offset in code if you explicitly choose `--frame tip` (or set `tcp_offset_in_code=True` in config).
 - Camera 1 serial: `f1380660`
 - Camera 2 serial: `f1371463`
 - ArUco marker:
@@ -305,13 +306,17 @@ cp checkpoints/xmem/XMem.pth XMem2-main/saves/
 **World Tag Measurements (Robot Base Frame)**
 **Convention:** ArUco CCW_center (origin at tag center; TL has +Y / TR has +X).
 Measured by touching the ArUco marker corners with the closed gripper (Feature: Base).
-If the robot TCP is left at flange, mentally add the 162 mm offset to match the gripper tip, or temporarily switch TCP to the gripper just for measurement.
+You can record either:
+- **3 values**: x y z (already tip/contact position in base), OR
+- **6 values**: x y z rx ry rz (flange pose from RTDE; recommended when robot TCP is flange).
+
+If you pass 6D flange poses, `compute_world_tag.py` will apply the `0 0 0.162` TCP offset by default to convert flange poses to the contact tip position.
 - Top-Left (TL): x = `-0.4646`, y = `0.5282`, z = `-0.2563`
 - Top-Right (TR): x = `-0.4661`, y = `0.5283`, z = `-0.3048`
 - Bottom-Left (BL): x = `-0.5143`, y = `0.5289`, z = `-0.2552`
 
 Compute `world_tag.json` from these three points (ArUco frame: X = TL→TR, Y = BL→TL).
-If you read flange poses (x,y,z,rx,ry,rz), you can pass 6 values and the script applies the 0.162 m TCP offset by default.
+If you pass 6D flange poses, the script applies the 0.162 m TCP offset by default (disable with `--no-tcp-offset`).
 ```bash
 python compute_world_tag.py \
   --tl -0.4646 0.5282 -0.2563 \
@@ -427,6 +432,7 @@ print("RTDE Control connected!")
 ```
 **Note**: `getActualTCPPose()` returns the pose of the **active robot TCP** (flange by default). The deployment code applies the 162 mm offset when `tcp_offset_in_code=True`.
 If RTDE control fails, ensure the robot is in **Remote Control** and the motors are **ON** (brakes released).
+In this repo we default to `FRAME = FLANGE` (no TCP offset applied in code). Only use tip mode if you explicitly run `--frame tip` (or set `tcp_offset_in_code=True` in config).
 
 ---
 
@@ -452,9 +458,6 @@ T_world_camera_cam1 = np.array([
     [0.0, 0.0, 0.0, 1.0],
 ])
 
-# TCP offset handling (lab keeps robot TCP at flange)
-config.tcp_offset_in_code = True
-config.tcp_offset_m = np.array([0.0, 0.0, 0.162])
 T_world_camera_cam2 = np.array([
     [0.9978, 0.0556, -0.0352, -0.5160],
     [-0.0283, -0.1209, -0.9923, 1.5065],
@@ -522,6 +525,9 @@ config = DeploymentConfig(
    
     # Execution
     execute_until_grip_change=True,
+    # Frame convention (default in this repo)
+    tcp_offset_in_code=False,  # FLANGE frame everywhere
+    tcp_offset_m=np.array([0.0, 0.0, 0.162], dtype=np.float64),  # used only if tcp_offset_in_code=True
     device="cuda:0",
 )
 ```
@@ -530,10 +536,13 @@ config = DeploymentConfig(
 Each recorded demo is **downsampled to `num_traj_wp` waypoints** before being fed to the model. The selection is **not uniform** in time. The current logic in `extract_waypoints()`:
 - Always includes the **first** and **last** frame.
 - Adds frames where the **gripper state changes**.
-- Adds extra points where motion between consecutive frames is **very small** (to smooth).
+- Adds a waypoint when the robot **slows down / stops** (detected as a transition from moving -> slow), which marks important stages.
 - If still fewer than `num_traj_wp`, fills remaining slots by **splitting motion-heavy segments**.
 
-So it’s normal to see waypoints clustered early and large jumps later. This is expected and matches the authors’ pipeline.
+This avoids wasting waypoints on long pauses (e.g., before you start moving) while still capturing stage boundaries.
+**Important:** gripper-change waypoints are detected from **Robotiq OBJ** feedback. Demos **must** include
+`grip_objs`; older demos without OBJ feedback are not supported for waypoint extraction.
+Live deployment also uses **OBJ** for the current gripper state; if OBJ is unavailable, deployment will error.
 
 ---
 
@@ -554,6 +563,41 @@ By default, the gripper is also opened before starting. To skip this, add `--no-
 ### 9.1 Start Demo Collection
 ```bash
 python -m ip.deployment --collect-demo --demo-out demos/task1_demo1.pkl
+```
+
+Optional: visualize live debugging outputs:
+```bash
+# Live masks
+python -m ip.deployment --demo demos/task1_demo1.pkl --viz masks
+
+# Live policy-frame point cloud (Viser at http://localhost:8080)
+python -m ip.deployment --demo demos/task1_demo1.pkl --viz pcd --viz-hz 10
+
+# Both
+python -m ip.deployment --demo demos/task1_demo1.pkl --viz both --viz-hz 10
+```
+
+Optional: **record** the live policy-frame point clouds for playback:
+```bash
+python -m ip.deployment --demo demos/task1_demo1.pkl \
+  --record-live-pcd
+```
+Replay with:
+```bash
+python -m ip.deployment.view_demo_pcds --demo ip/deployment/live_pcd_recording.pkl --policy-view
+```
+
+Optional: save RGB images for the selected waypoint frames (useful to verify `extract_waypoints()`):
+```bash
+python -m ip.deployment --collect-demo --demo-out demos/task1_demo1.pkl \
+  --debug-demo-waypoints \
+  --debug-demo-waypoints-dir ip/deployment/debug_waypoints \
+  --debug-demo-waypoints-num 10
+```
+
+Quickly inspect which frames were selected (prints indices + EE positions):
+```bash
+python -m ip.deployment.inspect_demo --demo demos/task1_demo1.pkl --num-waypoints 10
 ```
 
 ### 9.2 Recording Process
@@ -579,9 +623,27 @@ python -m ip.deployment --collect-demo --demo-out demos/task1_demo3.pkl
 python -m ip.deployment --demo demos/task1_demo1.pkl
 ```
 
+Defaults:
+- `--horizon-mode until-grip-change` (recommended; prevents gripper oscillation)
+- `--frame flange` (consistent flange frame everywhere)
+
+Override examples:
+```bash
+# Execute full predicted horizon every step (may cause gripper oscillation)
+python -m ip.deployment --demo demos/task1_demo1.pkl --horizon-mode full
+
+# Use tip frame (apply TCP offset in code)
+python -m ip.deployment --demo demos/task1_demo1.pkl --frame tip --tcp-offset-m 0 0 0.162
+```
+
 ### 10.2 Multiple Demos
 ```bash
-python -m ip.deployment --demo demos/task1_demo1.pkl --demo demos/task1_demo2.pkl
+python -m ip.deployment --demo demos/task1_demo1.pkl demos/task1_demo2.pkl
+```
+
+Convenient glob (bash will expand `*`):
+```bash
+python -m ip.deployment --demo demos/task1_demo*.pkl
 ```
 
 ### 10.3 Python API
