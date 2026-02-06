@@ -556,3 +556,51 @@ Add UR-side kinematic/safety prechecks in execution (not policy), and remove sil
 - Keeps singularity and kinematic handling in the hardware execution layer.
 - Prevents silent runtime behavior when command mode is misconfigured.
 - Avoids documenting non-existent safety fields.
+
+## SPARK Pure-Python Stack Kickoff (2026-02-06)
+
+### Decision
+Implement a new SPARK teleop/data-collection runtime inside `ip/deployment` and use `SPARK-Remote-data_collection` only as reference.
+
+### Changed
+- Created new package: `ip.deployment.spark_teleop` with ROS-free foundations:
+  - config model + JSON load/save
+  - Spark serial packet reader and encoder unwrapping
+  - UR runtime wrapper (RTDE + Robotiq)
+  - teleop control loops (bimanual-capable)
+  - Tk GUI monitor for Spark-vs-UR bounds
+  - optional recorder + RealSense capture path
+  - module entrypoint: `python -m ip.deployment.spark_teleop`
+- Added guide: `ip/deployment/docs/SPARK_TELEOP_GUIDE.md`.
+
+### Constraints Applied
+- Parity-first with the existing SPARK behavior:
+  - no ROS bus
+  - no extra safety policy beyond SPARK-style enable-gated teleop path
+  - GUI focused on teleop monitoring/controls rather than new visualization concepts.
+
+## SPARK Teleop Parity + Fail-Fast Pass (2026-02-06)
+
+### Decision
+Tighten SPARK teleop runtime semantics to avoid silent misconfiguration and make freedrive behavior consistent with expected operator control.
+
+### Changed
+- `ip.deployment.spark_teleop.config`:
+  - default config now auto-discovers local `offsets_lightning.pickle` / `offsets_thunder.pickle` when available.
+  - if not found, keeps `offsets_pickle=""` (explicitly editable in config).
+- `ip.deployment.spark_teleop.spark_serial`:
+  - Spark packet parser now validates at least 7 encoder values.
+  - if `offsets_pickle` is configured but missing, startup now raises (no silent fallback).
+- `ip.deployment.spark_teleop.ur_runtime`:
+  - entering freedrive stops active servo stream first.
+  - `servo_j` exits freedrive before commanding.
+  - added `is_freedrive_enabled()` for loop gating.
+- `ip.deployment.spark_teleop.controller`:
+  - command loop now pauses Spark servo while freedrive is active.
+  - on command gating transitions (disable/stale/enable switch off), loop stops ongoing servo motion cleanly.
+  - gripper command now keeps SPARK parity rounding (`0.1` steps after `[0,1]` clipping).
+
+### Why
+- Prevent hidden calibration-offset mismatches from bad file paths.
+- Keep freedrive and Spark teleop modes behaviorally separated for operator clarity.
+- Preserve fail-fast deployment principles while staying close to SPARK control flow.
