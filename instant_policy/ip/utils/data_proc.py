@@ -1,6 +1,6 @@
 import numpy as np
 import open3d as o3d
-from scipy.spatial.transform import Rotation as Rot, Slerp
+from scipy.spatial.transform import Rotation as Rot
 from ip.utils.common_utils import transform_pcd
 import torch
 from torch_geometric.data import Data
@@ -185,19 +185,22 @@ def subsample_traj(traj, grips, pcds=None, trans_space=0.01, rot_space=3):
 def extract_waypoints(traj, traj_states, num_waypoints):
     """Select L waypoints from a demo trajectory.
 
-    First-principles approach inspired by Automatic Waypoint Extraction (AWE):
-      - Treat a segment as valid if linear interpolation (SE(3)) approximates it within error.
-      - Use event anchors (gripper open/close transitions) as mandatory.
-      - Greedily split the segment with the highest interpolation error until L waypoints are reached.
+    First-principles selection:
+      - Preserve stage events (gripper open/close transitions).
+      - Preserve geometric progress (SE(3) motion coverage).
+      - Remove near-static pauses before selecting fixed-count waypoints.
     """
 
     n = len(traj)
+    if num_waypoints <= 0:
+        return []
     if n == 0:
         return []
 
     if n <= num_waypoints:
         return list(range(n)) + [n - 1] * (num_waypoints - n)
 
+    traj = np.asarray(traj, dtype=np.float64)
     traj_states = np.asarray(traj_states, dtype=np.float64)
     if traj_states.shape[0] != n:
         raise RuntimeError(
@@ -220,95 +223,81 @@ def extract_waypoints(traj, traj_states, num_waypoints):
     traj_states = np.where(is_one, 1.0, 0.0)
 
     rot_scale = 0.2  # ~1cm per 3deg
-    min_frame_gap = 2
-    min_motion = 3.5e-3
+    motion_deadband = 6.0e-3
 
     def _pose_err(Ta: np.ndarray, Tb: np.ndarray) -> float:
         dist_trans = np.linalg.norm(Ta[:3, 3] - Tb[:3, 3])
         dist_rot = Rot.from_matrix(Ta[:3, :3] @ Tb[:3, :3].T).magnitude()
         return float(dist_trans + rot_scale * dist_rot)
 
-    def _segment_error(i: int, j: int):
-        if j - i < 2:
-            return -1.0, None
-        Ta = traj[i]
-        Tb = traj[j]
-        ra = Rot.from_matrix(Ta[:3, :3])
-        rb = Rot.from_matrix(Tb[:3, :3])
-        slerp = Slerp([0.0, 1.0], Rot.from_quat([ra.as_quat(), rb.as_quat()]))
-        max_err = -1.0
-        max_idx = None
-        for k in range(i + 1, j):
-            if k - i < min_frame_gap or j - k < min_frame_gap:
-                continue
-            t = (k - i) / float(j - i)
-            T_interp = np.eye(4, dtype=np.float64)
-            T_interp[:3, 3] = (1.0 - t) * Ta[:3, 3] + t * Tb[:3, 3]
-            T_interp[:3, :3] = slerp([t])[0].as_matrix()
-            err = _pose_err(traj[k], T_interp)
-            if err > max_err:
-                max_err = err
-                max_idx = k
-        return max_err, max_idx
-
-    # Mandatory anchors: start/end, plus gripper change and pre-change frames.
-    anchors = {0, n - 1}
-    change_idxs = []
-    pre_change_idxs = []
+    # Step 1: remove near-static pause frames while preserving grip transitions.
+    compressed = [0]
     for i in range(1, n):
-        if traj_states[i] != traj_states[i - 1]:
+        prev = compressed[-1]
+        moved_enough = _pose_err(traj[prev], traj[i]) >= motion_deadband
+        grip_flipped = traj_states[i] != traj_states[prev]
+        if moved_enough or grip_flipped:
+            compressed.append(i)
+    if compressed[-1] != (n - 1):
+        compressed.append(n - 1)
+    compressed = sorted(set(compressed))
+
+    if len(compressed) <= num_waypoints:
+        return compressed + [compressed[-1]] * (num_waypoints - len(compressed))
+
+    traj_c = traj[compressed]
+    states_c = traj_states[compressed]
+    m = len(compressed)
+
+    # Step 2: mandatory anchors: start/end and both sides of each grip transition.
+    anchors = {0, m - 1}
+    change_idxs = []
+    for i in range(1, m):
+        if states_c[i] != states_c[i - 1]:
             change_idxs.append(i)
-            pre = i - 1
-            if pre >= 0:
-                if abs(i - pre) >= min_frame_gap or _pose_err(traj[i], traj[pre]) >= min_motion:
-                    pre_change_idxs.append(pre)
+            anchors.add(i)
+            anchors.add(i - 1)
+    anchors = sorted(anchors)
 
-    anchors.update(change_idxs)
-    anchors.update(pre_change_idxs)
-
-    # If too many anchors, prioritize start/end + change frames.
+    # If events exceed budget, keep endpoints + transition frames first.
     if len(anchors) > num_waypoints:
-        keep = {0, n - 1}
-        change_sorted = sorted(set(change_idxs))
-        budget = max(0, num_waypoints - 2)
-        if change_sorted:
-            if len(change_sorted) <= budget:
-                keep.update(change_sorted)
-            else:
-                picks = np.linspace(0, len(change_sorted) - 1, num=budget)
-                for j in np.unique(np.round(picks).astype(int)).tolist():
-                    keep.add(int(change_sorted[j]))
-        # Add pre-change if room.
-        for idx in pre_change_idxs:
+        keep = {0, m - 1}
+        for i in change_idxs:
             if len(keep) >= num_waypoints:
                 break
-            keep.add(idx)
-        return sorted(keep)
+            keep.add(i)
+        for i in change_idxs:
+            if len(keep) >= num_waypoints:
+                break
+            keep.add(i - 1)
+        selected = sorted(keep)
+        out = [compressed[i] for i in selected]
+        if len(out) < num_waypoints:
+            out += [out[-1]] * (num_waypoints - len(out))
+        return out[:num_waypoints]
 
-    waypoints = sorted(anchors)
+    # Build cumulative arc length over compressed path.
+    cum_arc = np.zeros(m, dtype=np.float64)
+    for i in range(1, m):
+        cum_arc[i] = cum_arc[i - 1] + _pose_err(traj_c[i - 1], traj_c[i])
 
-    # Greedily split the segment with the highest interpolation error.
-    segments = [(waypoints[i], waypoints[i + 1]) for i in range(len(waypoints) - 1)]
-    while len(waypoints) < num_waypoints:
-        best_err = -1.0
-        best_seg = None
-        best_idx = None
-        for i, j in segments:
-            err, idx = _segment_error(i, j)
-            if idx is None:
-                continue
-            if err > best_err:
-                best_err = err
-                best_seg = (i, j)
-                best_idx = idx
-        if best_idx is None:
+    # Step 3: fill remaining slots by farthest-point sampling over cumulative arc.
+    selected = set(anchors)
+    while len(selected) < num_waypoints:
+        candidates = [i for i in range(m) if i not in selected]
+        if not candidates:
             break
-        waypoints.append(best_idx)
-        waypoints = sorted(set(waypoints))
-        # Rebuild segments.
-        segments = [(waypoints[i], waypoints[i + 1]) for i in range(len(waypoints) - 1)]
+        sel_sorted = sorted(selected)
+        best = max(
+            candidates,
+            key=lambda c: min(abs(cum_arc[c] - cum_arc[s]) for s in sel_sorted),
+        )
+        selected.add(int(best))
 
-    return waypoints[:num_waypoints]
+    out = [compressed[i] for i in sorted(selected)]
+    if len(out) < num_waypoints:
+        out += [out[-1]] * (num_waypoints - len(out))
+    return out[:num_waypoints]
 
 
 def pose_error(T1, T2, rot_scale=0.01):

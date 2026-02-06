@@ -662,3 +662,42 @@ Keep Spark as control-input-only in the shared collector path, with GUI alive th
 - Matches original Spark operator mental model (monitoring GUI always on, explicit recording control).
 - Preserves identical data semantics between keyboard and Spark collection modes.
 - Removes edge-case mismatch in cancel flow before recording starts.
+
+## Waypoint Selection Refinement (2026-02-06)
+
+### Decision
+Refine fixed-10 waypoint extraction to prioritize task events and geometric coverage, while removing pause redundancy.
+
+### Changed
+- Updated `ip/utils/data_proc.py::extract_waypoints(...)`:
+  - keeps strict binary gripper-state requirement (`{0,1}`) for event semantics.
+  - adds a motion-compression pass before waypoint selection:
+    - drops near-static frames unless a gripper transition occurs.
+  - keeps mandatory anchors:
+    - start, end, gripper transition frame, and pre-transition frame.
+  - fills remaining slots to `num_waypoints` using arc-length coverage over compressed trajectory segments.
+  - fallback fills any shortfall using farthest-by-arc points; pads with final frame only when unavoidable.
+
+### Why
+- Reduces wasted waypoint slots on long pauses / jitter.
+- Keeps open/close stage boundaries explicit for conditioning.
+- Makes selection less sensitive to recording speed (keyboard vs Spark) by using geometric progress instead of time.
+
+## Waypoint Selector Simplification (2026-02-06)
+
+### Decision
+Keep the same first-principles behavior, but reduce implementation complexity.
+
+### Changed
+- Simplified `ip/utils/data_proc.py::extract_waypoints(...)` fill stage:
+  - removed per-segment budget allocation and interpolation-placement logic.
+  - now uses one deterministic rule after anchors:
+    - farthest-point sampling over cumulative SE(3) arc length.
+- Kept unchanged:
+  - motion compression pass,
+  - mandatory grip-transition anchors,
+  - strict binary grip-state check.
+
+### Why
+- Easier to reason about and maintain.
+- Preserves the intended behavior (event preservation + geometric coverage + pause suppression) without extra machinery.

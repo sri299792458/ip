@@ -558,10 +558,11 @@ config = DeploymentConfig(
 ### Waypoint selection (num_traj_wp)
 Each recorded demo is **downsampled to `num_traj_wp` waypoints** before being fed to the model. The selection is **not uniform** in time. The current logic in `extract_waypoints()`:
 - Always includes the **first** and **last** frame.
+- First does a **motion compression pass** that removes near-static pause frames while preserving any gripper flip.
 - Adds mandatory anchors at **gripper state transitions** and the frame just before each transition.
-- If still fewer than `num_traj_wp`, greedily fills by **splitting the segment with highest pose interpolation error**.
+- Fills remaining slots to `num_traj_wp` by **farthest-point sampling on cumulative SE(3) arc length**, not by wall-clock time.
 
-This avoids wasting waypoints on long pauses (e.g., before you start moving) while still capturing stage boundaries.
+This avoids wasting waypoints on long pauses while still capturing task-stage boundaries and motion geometry.
 **Important:** gripper-change waypoints are detected from the final binary `grips` signal.
 `grips` is derived from measured gripper openness (`get_gripper_state`) using RLBench-style binarization:
 open if `open_amount > 0.9`, else closed.
