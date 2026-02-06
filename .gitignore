@@ -2,7 +2,7 @@ RLBench/
 model.pt
 XMem2-main/
 zeus-master/
-SPARK-Remote-main/
+SPARK-Remote-data_collection/
 camera-utils-main/
 instant_policy/checkpoints/
 instant_policy/demos/

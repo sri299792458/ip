@@ -48,11 +48,13 @@ class GripperConfig:
 class RTDEControlConfig:
     frequency_hz: int = 500
     control_mode: str = "servoL"  # moveL or servoL
-    move_speed: float = 0.1
-    move_acceleration: float = 0.5
-    servo_speed: float = 0.1
-    servo_acceleration: float = 0.5
-    servo_time: float = 0.1
+    move_speed: float = 0.25
+    move_acceleration: float = 1.2
+    # NOTE: For UR servoJ/servoL in RTDE, speed/acceleration are currently not used.
+    servo_speed: float = 0.25
+    servo_acceleration: float = 1.2
+    # e-Series default servo period is 2ms.
+    servo_time: float = 0.002
     servo_lookahead: float = 0.1
     servo_gain: int = 300
 

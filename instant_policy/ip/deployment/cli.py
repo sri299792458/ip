@@ -16,8 +16,8 @@ from ip.deployment.demo.demo_collector import DemoCollector
 from ip.deployment.perception.manual_seed_xmem import manual_seed_xmem
 from ip.deployment.orchestrator import InstantPolicyDeployment
 
-HOME_MOVE_SPEED_RAD_S = 1.0
-HOME_MOVE_ACCEL_RAD_S2 = 1.2
+HOME_MOVE_SPEED_RAD_S = 1.05
+HOME_MOVE_ACCEL_RAD_S2 = 1.4
 DEPLOYMENT_DIR = Path(__file__).resolve().parent
 HOME_JOINTS_PATH = DEPLOYMENT_DIR / "assets" / "home_joint.json"
 LIVE_OUT_PATH = DEPLOYMENT_DIR / "live.pkl"
@@ -39,8 +39,6 @@ def build_default_config() -> DeploymentConfig:
     config.segmentation.xmem_checkpoint_path = "./checkpoints/xmem/XMem.pth"
     config.segmentation.enable = True
     config.device = "cuda:0"
-    config.rtde.move_speed = 0.05
-    config.rtde.move_acceleration = 0.2
     config.safety = SafetyLimits(
         max_translation=0.01,
         max_rotation=np.deg2rad(3.0),

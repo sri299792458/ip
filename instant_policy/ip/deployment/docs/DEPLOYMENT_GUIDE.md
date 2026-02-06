@@ -533,8 +533,11 @@ config = DeploymentConfig(
     # Control
     rtde=RTDEControlConfig(
         control_mode="servoL",  # or "moveL"
-        move_speed=0.1,
-        move_acceleration=0.5,
+        move_speed=0.25,          # moveL default [m/s]
+        move_acceleration=1.2,    # moveL default [m/s^2]
+        servo_time=0.002,         # e-Series servo period [s]
+        servo_lookahead=0.1,      # [0.03, 0.2]
+        servo_gain=300,           # [100, 2000]
     ),
    
     # Safety (per-step limits)
@@ -769,6 +772,11 @@ Playback speed can be adjusted from the **FPS** slider in the viewer GUI.
 ### Issue: "Safety limit exceeded"
 - Increase `max_translation` / `max_rotation` if needed (carefully)
 
+### Issue: "No IK solution for target pose near current joints"
+- This indicates the predicted Cartesian target is not kinematically reachable on the current branch.
+- Move robot to a better start posture and re-run.
+- Verify calibration and `--flange-to-policy-origin-m` match the demos exactly.
+
 ---
 
 ## Step 12: Best Practices
@@ -780,7 +788,9 @@ Playback speed can be adjusted from the **FPS** slider in the viewer GUI.
 - Include both successful and recovery motions
 
 ### Execution Tips
-- Start with low speeds (`move_speed=0.05`)
+- Keep per-step safety limits conservative (`max_translation=0.01`, `max_rotation=3 deg`)
+- Use `servoL` for policy rollout and `moveJ` only for coarse homing/repositioning
+- Deployment now prechecks each policy target with UR kinematics (`qNear=current_q`) and safety limits before executing bounded servo substeps
 - Keep hand near E-stop during testing
 - Test on simple tasks first (e.g., pick-and-place)
 

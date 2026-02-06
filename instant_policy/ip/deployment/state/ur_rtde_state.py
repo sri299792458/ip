@@ -35,6 +35,14 @@ class URRTDEState:
             T = T @ T_offset
         return T
 
+    def get_actual_q(self) -> np.ndarray:
+        q = np.asarray(self._rtde.getActualQ(), dtype=np.float64)
+        if q.shape != (6,):
+            raise RuntimeError(f"Unexpected joint vector shape from RTDE: {q.shape}")
+        if not np.isfinite(q).all():
+            raise RuntimeError(f"Non-finite joint values from RTDE: {q.tolist()}")
+        return q
+
     def get_gripper_state(self) -> float:
         if self._gripper is None:
             raise RuntimeError("Robotiq gripper is not available for gripper state feedback.")

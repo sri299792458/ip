@@ -77,8 +77,6 @@ def main():
     print("\nSuggested config snippet:")
     print(
         "config.safety = SafetyLimits(\n"
-        f"    workspace_min=np.array([{min_xyz[0]:.4f}, {min_xyz[1]:.4f}, {min_xyz[2]:.4f}]),\n"
-        f"    workspace_max=np.array([{max_xyz[0]:.4f}, {max_xyz[1]:.4f}, {max_xyz[2]:.4f}]),\n"
         "    max_translation=0.01,\n"
         "    max_rotation=np.deg2rad(3.0),\n"
         ")"

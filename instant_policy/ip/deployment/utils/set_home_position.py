@@ -22,8 +22,8 @@ import numpy as np
 import rtde_control
 import rtde_receive
 
-SET_HOME_SPEED_RAD_S = 1.0
-SET_HOME_ACCEL_RAD_S2 = 1.2
+SET_HOME_SPEED_RAD_S = 1.05
+SET_HOME_ACCEL_RAD_S2 = 1.4
 WAIT_TOLERANCE_DEG = 1.0
 WAIT_MAX_SECONDS = 10.0
 

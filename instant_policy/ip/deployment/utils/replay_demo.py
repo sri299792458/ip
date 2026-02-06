@@ -17,8 +17,8 @@ from ip.deployment.control.ur_rtde_control import URRTDEControl
 from ip.deployment.state.ur_rtde_state import URRTDEState
 from ip.deployment.control.robotiq_gripper import RobotiqGripper
 
-REPLAY_MOVE_SPEED_M_S = 0.1
-REPLAY_MOVE_ACCEL_M_S2 = 0.5
+REPLAY_MOVE_SPEED_M_S = 0.25
+REPLAY_MOVE_ACCEL_M_S2 = 1.2
 
 
 def _prompt(msg: str) -> bool:

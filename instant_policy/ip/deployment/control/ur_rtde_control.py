@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import rtde_control
@@ -21,6 +21,11 @@ class URRTDEControl:
     ):
         self._rtde = rtde
         self._cfg = control_config
+        self._mode = self._cfg.control_mode.lower()
+        if self._mode not in {"servol", "movel"}:
+            raise ValueError(
+                f"Unsupported control_mode={self._cfg.control_mode!r}. Expected 'servoL' or 'moveL'."
+            )
         self._gripper = gripper
         self._gripper_cfg = gripper_config or GripperConfig(enable=gripper is not None)
         if self._gripper_cfg.enable and self._gripper is None:
@@ -32,18 +37,44 @@ class URRTDEControl:
     def connect(robot_ip: str, control_config: RTDEControlConfig) -> "rtde_control.RTDEControlInterface":
         return rtde_control.RTDEControlInterface(robot_ip, control_config.frequency_hz)
 
-    def execute_pose(self, T_w_e: np.ndarray) -> bool:
+    def _to_rtde_pose(self, T_w_e: np.ndarray) -> list:
         if self._tcp_offset_in_code and self._tcp_offset_m is not None:
-            T_offset = np.eye(4)
+            T_offset = np.eye(4, dtype=np.float64)
             T_offset[:3, 3] = self._tcp_offset_m
             T_w_e = T_w_e @ np.linalg.inv(T_offset)
         position = T_w_e[:3, 3]
         rotvec = Rotation.from_matrix(T_w_e[:3, :3]).as_rotvec()
-        pose = list(position) + list(rotvec)
+        return list(position) + list(rotvec)
 
-        mode = self._cfg.control_mode.lower()
-        if mode == "servol":
-            self._rtde.servoL(
+    @staticmethod
+    def _is_command_success(result) -> bool:
+        # ur_rtde methods usually return bool; treat only explicit False as failure.
+        return result is not False
+
+    def validate_target_pose(self, T_w_e: np.ndarray, q_near: np.ndarray) -> Tuple[bool, str]:
+        pose = self._to_rtde_pose(T_w_e)
+        q_near_arr = np.asarray(q_near, dtype=np.float64)
+        if q_near_arr.shape != (6,):
+            raise RuntimeError(f"q_near must be shape (6,), got {q_near_arr.shape}")
+        q_near_list = [float(x) for x in q_near_arr.tolist()]
+
+        if not self._rtde.isPoseWithinSafetyLimits(pose):
+            return False, "Target pose violates UR safety limits"
+        if not self._rtde.getInverseKinematicsHasSolution(pose, q_near_list):
+            return False, "No IK solution for target pose near current joints"
+
+        q_sol = self._rtde.getInverseKinematics(pose, q_near_list)
+        if len(q_sol) != 6:
+            return False, "IK solver did not return a 6-DoF joint solution"
+        if not self._rtde.isJointsWithinSafetyLimits(q_sol):
+            return False, "IK solution violates UR joint safety limits"
+        return True, ""
+
+    def execute_pose(self, T_w_e: np.ndarray) -> bool:
+        pose = self._to_rtde_pose(T_w_e)
+
+        if self._mode == "servol":
+            result = self._rtde.servoL(
                 pose,
                 self._cfg.servo_speed,
                 self._cfg.servo_acceleration,
@@ -53,13 +84,14 @@ class URRTDEControl:
             )
             if self._cfg.servo_time > 0:
                 time.sleep(self._cfg.servo_time)
+            return self._is_command_success(result)
         else:
-            self._rtde.moveL(
+            result = self._rtde.moveL(
                 pose,
                 self._cfg.move_speed,
                 self._cfg.move_acceleration,
             )
-        return True
+            return self._is_command_success(result)
 
     def execute_gripper(self, command: float) -> None:
         if not self._gripper_cfg.enable:

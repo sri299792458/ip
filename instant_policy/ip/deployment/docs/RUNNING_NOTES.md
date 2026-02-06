@@ -507,3 +507,52 @@ Remove remaining non-flange legacy frame handling from deployment/replay metadat
 ### Why
 - Keeps frame convention single-path and explicit: RTDE TCP is flange, plus one flange->policy-origin offset vector.
 - Avoids silent or ambiguous behavior when replaying older frame metadata formats.
+
+## Motion Control Alignment (2026-02-06)
+
+### Decision
+Align deployment motion defaults with UR/RTDE conventions and replace precomputed interpolation with a bounded feedback servo-step loop.
+
+### Changed
+- `ActionExecutor` now executes each policy target with a bounded closed-loop step:
+  - each step uses current measured `T_w_e`,
+  - bounds translation/rotation by safety limits per command,
+  - repeats until target tolerance is reached (or hard substep cap).
+- Updated defaults/constants:
+  - `RTDEControlConfig.move_speed=0.25`, `move_acceleration=1.2`
+  - `RTDEControlConfig.servo_time=0.002`, `servo_lookahead=0.1`, `servo_gain=300`
+  - homing `moveJ` constants to `speed=1.05`, `acceleration=1.4`
+  - replay `moveL` constants to `speed=0.25`, `acceleration=1.2`
+- Removed custom deployment override that forced non-standard `moveL` defaults.
+
+### Why
+- Preserve Instant Policy target semantics (`T_target = T_base @ action_j`) without clipping policy outputs.
+- Enforce safety at command execution level with feedback on real robot state.
+- Keep defaults consistent with URScript/RTDE baseline conventions.
+
+## Hardware Kinematic Guard + Strict RTDE Mode (2026-02-06)
+
+### Decision
+Add UR-side kinematic/safety prechecks in execution (not policy), and remove silent motion fallbacks.
+
+### Changed
+- `ActionExecutor`:
+  - before each policy target, reads current joints and runs control-level target validation.
+  - aborts early with explicit reason when target is not kinematically safe.
+- `URRTDEState`:
+  - added `get_actual_q()` with finite/shape checks.
+- `URRTDEControl`:
+  - added target validation path using:
+    - `isPoseWithinSafetyLimits`
+    - `getInverseKinematicsHasSolution(..., qNear=current_q)`
+    - `getInverseKinematics(..., qNear=current_q)`
+    - `isJointsWithinSafetyLimits`
+  - `execute_pose()` now propagates explicit RTDE command failure.
+  - invalid `control_mode` now raises immediately (no implicit fallback to `moveL`).
+- `measure_workspace_bounds.py`:
+  - removed stale `workspace_min/workspace_max` snippet fields (those fields are no longer part of `SafetyLimits`).
+
+### Why
+- Keeps singularity and kinematic handling in the hardware execution layer.
+- Prevents silent runtime behavior when command mode is misconfigured.
+- Avoids documenting non-existent safety fields.
