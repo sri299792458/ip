@@ -1,21 +1,9 @@
-import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import numpy as np
-
-try:
-    import open3d as o3d
-except Exception:  # pragma: no cover - optional dependency
-    o3d = None
-
-try:
-    import pyrealsense2 as rs
-except Exception as exc:  # pragma: no cover - optional dependency
-    rs = None
-    _RS_IMPORT_ERROR = exc
-else:
-    _RS_IMPORT_ERROR = None
+import open3d as o3d
+import pyrealsense2 as rs
 
 from ip.deployment.perception.sam_segmentation import SAMSegmenter
 
@@ -60,8 +48,6 @@ class RealSensePerception:
         segmenter: Optional[SAMSegmenter] = None,
         voxel_size: Optional[float] = None,
     ):
-        if rs is None:
-            raise ImportError(f"pyrealsense2 is required: {_RS_IMPORT_ERROR}")
         self._segmenter = segmenter
         self._voxel_size = voxel_size
         self._cameras = []
@@ -102,8 +88,8 @@ class RealSensePerception:
         for cam in self._cameras:
             try:
                 cam.pipeline.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[warn] Failed to stop RealSense pipeline for {cam.serial}: {exc}")
 
     @property
     def segmenter(self):
@@ -132,10 +118,16 @@ class RealSensePerception:
         self,
         segmentation_masks: Optional[Iterable[np.ndarray]] = None,
         use_segmentation: bool = False,
+        capture_debug_frames: bool = False,
     ) -> np.ndarray:
         all_points = []
         self._last_debug_frames = []
         segmenter_masks = None
+        if use_segmentation and segmentation_masks is None and self._segmenter is None:
+            raise RuntimeError(
+                "Segmentation is enabled, but no segmentation source is available "
+                "(no masks provided and no segmenter configured)."
+            )
         if use_segmentation and segmentation_masks is None and self._segmenter is not None:
             if hasattr(self._segmenter, "get_masks"):
                 segmenter_masks = self._segmenter.get_masks()
@@ -151,7 +143,10 @@ class RealSensePerception:
             depth_frame = frames.get_depth_frame()
             color_frame = frames.get_color_frame()
             if not depth_frame or not color_frame:
-                continue
+                raise RuntimeError(
+                    f"Missing RealSense frames for camera {cam.serial}: "
+                    f"depth_ok={bool(depth_frame)} color_ok={bool(color_frame)}"
+                )
 
             depth = np.asanyarray(depth_frame.get_data()).astype(np.float32) * cam.depth_scale
             color = np.asanyarray(color_frame.get_data())
@@ -165,20 +160,27 @@ class RealSensePerception:
                     mask = self._segmenter.segment_camera(color, idx)
                 else:
                     mask = self._segment(color)
+            if use_segmentation and mask is None:
+                raise RuntimeError(
+                    f"Segmentation is enabled but no mask was produced for camera {cam.serial} (index {idx})."
+                )
             if mask is not None and mask.shape != depth.shape:
-                logging.warning("Segmentation mask shape mismatch, ignoring")
-                mask = None
+                raise ValueError(
+                    f"Segmentation mask shape mismatch for camera {cam.serial}: "
+                    f"mask={mask.shape}, depth={depth.shape}"
+                )
             if mask is not None:
                 depth = depth * mask.astype(np.float32)
 
-            self._last_debug_frames.append(
-                {
-                    "camera_index": idx,
-                    "serial": cam.serial,
-                    "rgb": color,
-                    "mask": mask,
-                }
-            )
+            if capture_debug_frames:
+                self._last_debug_frames.append(
+                    {
+                        "camera_index": idx,
+                        "serial": cam.serial,
+                        "rgb": color,
+                        "mask": mask,
+                    }
+                )
 
             xyz_cam = _get_xyz(depth, cam.K).T
             valid = np.isfinite(xyz_cam).all(axis=1) & (xyz_cam[:, 2] > 0)
@@ -187,8 +189,7 @@ class RealSensePerception:
             all_points.append(xyz_world)
 
         if not all_points:
-            logging.warning("No valid point clouds captured")
-            return np.zeros((0, 3), dtype=np.float32)
+            raise RuntimeError("No valid point clouds captured from any configured camera.")
 
         pcd = np.concatenate(all_points, axis=0)
         if self._voxel_size and o3d is not None:
@@ -200,8 +201,6 @@ class RealSensePerception:
 
     @staticmethod
     def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
-        if o3d is None:
-            return points
         cloud = o3d.geometry.PointCloud()
         cloud.points = o3d.utility.Vector3dVector(points)
         down = cloud.voxel_down_sample(voxel_size)

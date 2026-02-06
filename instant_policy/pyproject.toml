@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ip"
+version = "0.0.0"
+description = "Instant Policy codebase"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Instant Policy Contributors" },
+]
+dependencies = []
+
+[project.optional-dependencies]
+deployment = [
+  "ur_rtde",
+  "pynput",
+  "opencv-python",
+  "viser",
+  "gdown",
+]
+segmentation = [
+  "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
+]
+dev = [
+  "pytest",
+  "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ip*"]

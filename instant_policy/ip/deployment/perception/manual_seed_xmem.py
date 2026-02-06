@@ -3,26 +3,13 @@ import argparse
 from pathlib import Path
 from typing import Iterable, Optional
 
+import cv2
 import numpy as np
-
-try:
-    import cv2
-except Exception as exc:  # pragma: no cover - optional dependency
-    cv2 = None
-    _CV2_IMPORT_ERROR = exc
-else:
-    _CV2_IMPORT_ERROR = None
 
 from ip.deployment.perception.realsense_perception import RealSensePerception
 
 
-def _require_cv2():
-    if cv2 is None:
-        raise ImportError(f"OpenCV is required: {_CV2_IMPORT_ERROR}")
-
-
 def _interactive_grabcut(rgb: np.ndarray, window_name: str) -> np.ndarray:
-    _require_cv2()
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     combined_mask = np.zeros(bgr.shape[:2], np.uint8)
     while True:

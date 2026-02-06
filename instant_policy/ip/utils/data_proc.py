@@ -82,15 +82,11 @@ def save_sample(sample, save_dir=None, offset=0, scene_encoder=None):
             return data
 
 
-def sample_to_cond_demo(sample, num_waypoints, num_points=2048, require_grip_objs: bool = False):
-    grip_objs = sample.get("grip_objs", None)
-    grip_objs = np.array(grip_objs) if grip_objs is not None else None
+def sample_to_cond_demo(sample, num_waypoints, num_points=2048):
     traj_indices = extract_waypoints(
         np.array(sample['T_w_es']),
         np.array(sample['grips']),
         num_waypoints=num_waypoints,
-        grip_objs=grip_objs,
-        require_grip_objs=require_grip_objs,
     )
 
     pcds = [transform_pcd(subsample_pcd(sample['pcds'][idx], num_points),
@@ -186,7 +182,7 @@ def subsample_traj(traj, grips, pcds=None, trans_space=0.01, rot_space=3):
     return subsampled_traj, subsampled_grips
 
 
-def extract_waypoints(traj, traj_states, num_waypoints, grip_objs=None, require_grip_objs: bool = False):
+def extract_waypoints(traj, traj_states, num_waypoints):
     """Select L waypoints from a demo trajectory.
 
     First-principles approach inspired by Automatic Waypoint Extraction (AWE):
@@ -199,55 +195,29 @@ def extract_waypoints(traj, traj_states, num_waypoints, grip_objs=None, require_
     if n == 0:
         return []
 
-    if require_grip_objs:
-        if grip_objs is None or len(grip_objs) != n or any(obj is None for obj in grip_objs):
-            raise ValueError(
-                "grip_objs is required for waypoint extraction. "
-                "Re-record the demo with Robotiq OBJ feedback enabled."
-            )
-
     if n <= num_waypoints:
         return list(range(n)) + [n - 1] * (num_waypoints - n)
 
-    # Build gripper state from OBJ (debounced) if available.
-    if grip_objs is not None and len(grip_objs) == n and all(obj is not None for obj in grip_objs):
-        raw = []
-        for obj in grip_objs:
-            obj_i = int(obj)
-            if obj_i in {1, 2}:
-                raw.append(0)
-            elif obj_i == 3:
-                raw.append(1)
-            else:
-                raw.append(None)  # OBJ=0 -> moving/unknown
-
-        k_hold = 2
-        debounced = []
-        state = next((r for r in raw if r is not None), 1)  # default open if unknown
-        cand = None
-        cnt = 0
-        for r in raw:
-            if r is None:
-                debounced.append(state)
-                continue
-            if r == state:
-                cand = None
-                cnt = 0
-                debounced.append(state)
-                continue
-            if cand is None or cand != r:
-                cand = r
-                cnt = 1
-            else:
-                cnt += 1
-            if cnt >= k_hold:
-                state = cand
-                cand = None
-                cnt = 0
-            debounced.append(state)
-        traj_states = np.array(debounced, dtype=np.float64)
-
     traj_states = np.asarray(traj_states, dtype=np.float64)
+    if traj_states.shape[0] != n:
+        raise RuntimeError(
+            f"Waypoint extraction expected {n} gripper states, got {traj_states.shape[0]}."
+        )
+    if not np.all(np.isfinite(traj_states)):
+        raise RuntimeError("Waypoint extraction received non-finite gripper state values.")
+
+    # Gripper labels are expected to be binary (RLBench-style 0/1). Keep this strict
+    # so ambiguous continuous values do not silently change waypoint events.
+    is_zero = np.isclose(traj_states, 0.0, atol=1e-6)
+    is_one = np.isclose(traj_states, 1.0, atol=1e-6)
+    if not np.all(is_zero | is_one):
+        bad = traj_states[~(is_zero | is_one)]
+        sample_bad = np.array2string(bad[:5], precision=4, separator=", ")
+        raise RuntimeError(
+            "Waypoint extraction expects binary gripper states in {0,1}; "
+            f"got non-binary values (sample): {sample_bad}"
+        )
+    traj_states = np.where(is_one, 1.0, 0.0)
 
     rot_scale = 0.2  # ~1cm per 3deg
     min_frame_gap = 2

@@ -1,6 +1,7 @@
 from ip.deployment.control.action_executor import ActionExecutor, SafetyLimits
+from ip.deployment.control.robotiq_gripper import RobotiqGripper
 
-__all__ = ["ActionExecutor", "SafetyLimits", "URRTDEControl"]
+__all__ = ["ActionExecutor", "SafetyLimits", "URRTDEControl", "RobotiqGripper"]
 
 
 def __getattr__(name: str):

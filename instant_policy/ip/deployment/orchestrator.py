@@ -1,8 +1,9 @@
 import pickle
-import time
+from datetime import datetime, timezone
 from typing import Iterable, List, Optional
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 
@@ -12,7 +13,7 @@ from ip.deployment.control.ur_rtde_control import URRTDEControl
 from ip.deployment.perception.realsense_perception import RealSensePerception
 from ip.deployment.perception.sam_segmentation import build_segmenter
 from ip.deployment.state.ur_rtde_state import URRTDEState
-from ip.deployment.ur.robotiq_gripper import RobotiqGripper
+from ip.deployment.control.robotiq_gripper import RobotiqGripper
 from ip.models.diffusion import GraphDiffusion
 from ip.utils.common_utils import transform_pcd
 from ip.utils.data_proc import sample_to_cond_demo, save_sample, subsample_pcd
@@ -36,9 +37,6 @@ class InstantPolicyDeployment:
         self.state = state
         self.control = control
         self._debug_gripper = debug_gripper
-        self._pcd_viz = None
-        self._pcd_handle = None
-        self._pcd_last_ts = 0.0
 
         if self.perception is None:
             if not config.camera_configs:
@@ -98,8 +96,6 @@ class InstantPolicyDeployment:
                 config.num_diffusion_iters,
                 config.device,
             )
-        if self.config.show_live_pcd:
-            self._init_live_pcd_viewer()
 
     def _load_model(self, model_path: str, num_demos: int, num_diffusion_iters: int, device: Optional[str]):
         config = pickle.load(open(f"{model_path}/config.pkl", "rb"))
@@ -131,7 +127,6 @@ class InstantPolicyDeployment:
                         demo,
                         self.config.num_traj_wp,
                         num_points=self.config.pcd_num_points,
-                        require_grip_objs=True,
                     )
                 )
         if len(prepared) < self.model_config["num_demos"]:
@@ -141,7 +136,25 @@ class InstantPolicyDeployment:
                 prepared.append(prepared[-1])
         return prepared[: self.model_config["num_demos"]]
 
-    def run(self, demos: Iterable[dict], max_steps: Optional[int] = None, execution_horizon: Optional[int] = None) -> bool:
+    def _frame_spec(self) -> dict:
+        return {
+            "robot_tcp_frame": "flange",
+            "flange_to_policy_origin_m": [
+                float(x)
+                for x in np.asarray(self.config.tcp_offset_m, dtype=np.float64).reshape(3)
+            ],
+        }
+
+    def run(
+        self,
+        demos: Iterable[dict],
+        max_steps: Optional[int] = None,
+        execution_horizon: Optional[int] = None,
+        save_live: bool = False,
+        live_out: str = "ip/deployment/live.pkl",
+        debug_live_frames: bool = False,
+        debug_live_frames_dir: str = "ip/deployment/debug_live",
+    ) -> bool:
         if self.model is None or self.model_config is None:
             raise RuntimeError("Model is not loaded. Initialize with load_model=True to run deployment.")
         prepared_demos = self._prepare_demos(demos)
@@ -153,39 +166,58 @@ class InstantPolicyDeployment:
         device = torch.device(self.model_config["device"])
         device_type = device.type
 
-        record = None
-        record_out = None
-        if getattr(self.config, "record_live_pcd", False):
-            record = {"pcds": [], "T_w_es": [], "grips": []}
-            record_out = Path(getattr(self.config, "record_live_pcd_out", "live_pcd_recording.pkl"))
-            record_out.parent.mkdir(parents=True, exist_ok=True)
+        live_record = None
+        live_out_path = None
+        if save_live:
+            live_record = {
+                "pcds": [],
+                "T_w_es": [],
+                "grips": [],
+                "frame_spec": self._frame_spec(),
+                "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            live_out_path = Path(live_out)
+            live_out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        debug_live_dir_path = None
+        if debug_live_frames:
+            debug_live_dir_path = Path(debug_live_frames_dir)
+            debug_live_dir_path.mkdir(parents=True, exist_ok=True)
 
         try:
             for k in range(max_steps):
                 T_w_e = self.state.get_T_w_e()
-                grip_obj = self.state.get_gripper_obj_state(require=True)
-                grip = 0.0 if grip_obj in {1, 2} else 1.0  # 1=open, 0=closed (OBJ: 1/2=contact)
-                grip_raw = None
-                pcd_w = self.perception.capture_pcd_world(use_segmentation=self.config.segmentation.enable)
-                if self.config.show_masks:
-                    self._show_masks()
+                grip_raw = float(self.state.get_gripper_state())
+                if not np.isfinite(grip_raw):
+                    raise RuntimeError(f"Non-finite gripper feedback during deployment: {grip_raw}")
+                # Match RLBench observation convention: gripper_open = 1 if open_amount > 0.9 else 0.
+                grip = 1.0 if grip_raw > 0.9 else 0.0
+                pcd_w = self.perception.capture_pcd_world(
+                    use_segmentation=self.config.segmentation.enable,
+                    capture_debug_frames=debug_live_frames,
+                )
+                if debug_live_frames and debug_live_dir_path is not None:
+                    self._save_live_debug_frames(
+                        step_idx=k,
+                        grip_raw=grip_raw,
+                        grip_bin=grip,
+                        out_dir=debug_live_dir_path,
+                        cv2=cv2,
+                    )
                 if pcd_w.size == 0:
-                    print("Empty point cloud, skipping step")
-                    continue
+                    raise RuntimeError("Perception returned empty point cloud during deployment.")
 
                 pcd_ee = transform_pcd(
                     subsample_pcd(pcd_w, num_points=self.config.pcd_num_points),
                     np.linalg.inv(T_w_e),
                 )
-                if getattr(self.config, "show_live_pcd", False):
-                    self._show_live_pcd(pcd_ee)
                 if self.config.debug_frame_sanity and (k % self.config.debug_frame_every == 0):
                     self._print_frame_sanity(T_w_e, pcd_ee)
 
-                if record is not None and (k % max(1, int(getattr(self.config, "record_live_pcd_every", 1))) == 0):
-                    record["pcds"].append(np.asarray(pcd_ee, dtype=np.float32))
-                    record["T_w_es"].append(np.asarray(T_w_e, dtype=np.float64))
-                    record["grips"].append(float(grip))
+                if live_record is not None:
+                    live_record["pcds"].append(np.asarray(pcd_w, dtype=np.float32))
+                    live_record["T_w_es"].append(np.asarray(T_w_e, dtype=np.float64))
+                    live_record["grips"].append(float(grip))
 
                 full_sample["live"] = {
                     "obs": [pcd_ee],
@@ -216,7 +248,7 @@ class InstantPolicyDeployment:
                 for idx in range(min(3, len(actions))):
                     print(f"  [{idx}] T_e_e_rel:\n{actions[idx]}")
                 state_label = "open" if grip >= 0.5 else "closed"
-                print(f"Current gripper obj={grip_obj} bin={grip} ({state_label})")
+                print(f"Current gripper raw={grip_raw:.3f} bin={grip} ({state_label})")
                 print("Policy output grips (first 8):", grips[: min(8, len(grips))])
                 if self._debug_gripper:
                     grip_cmds = (grips + 1.0) / 2.0
@@ -241,72 +273,53 @@ class InstantPolicyDeployment:
                 print(f"Step {k}: executed {steps} actions")
             return True
         finally:
-            if record is not None and record_out is not None and record["pcds"]:
-                with record_out.open("wb") as f:
-                    pickle.dump(record, f)
-                print(f"[record] Saved live policy-frame PCDs to {record_out}")
+            if live_record is not None and live_out_path is not None:
+                with live_out_path.open("wb") as f:
+                    pickle.dump(live_record, f)
+                print(f"[record] Saved live rollout to {live_out_path}")
 
-    def _init_live_pcd_viewer(self) -> None:
-        try:
-            import viser
-        except Exception:
-            print("[warn] Viser is not available; live PCD viewer disabled.")
-            self.config.show_live_pcd = False
-            return
-
-        self._pcd_viz = viser.ViserServer()
-        self._pcd_viz.scene.world_axes.visible = True
-        self._pcd_handle = self._pcd_viz.scene.add_point_cloud(
-            "/live/pcd",
-            points=np.zeros((0, 3), dtype=np.float32),
-            colors=(80, 220, 120),
-            point_size=0.003,
-            point_shape="square",
-        )
-
-    def _show_live_pcd(self, pcd_ee: np.ndarray) -> None:
-        if self._pcd_viz is None or self._pcd_handle is None:
-            return
-        now = time.time()
-        hz = float(getattr(self.config, "show_live_pcd_hz", 10.0))
-        if hz > 0 and now - self._pcd_last_ts < 1.0 / hz:
-            return
-        self._pcd_last_ts = now
-
-        if pcd_ee is None or pcd_ee.size == 0:
-            points = np.zeros((0, 3), dtype=np.float32)
-        else:
-            points = np.asarray(pcd_ee, dtype=np.float32)
-        self._pcd_handle.points = points
-
-    def _show_masks(self) -> None:
-        try:
-            import cv2
-        except Exception:
-            return
-
+    def _save_live_debug_frames(
+        self,
+        step_idx: int,
+        grip_raw: float,
+        grip_bin: float,
+        out_dir: Path,
+        cv2,
+    ) -> None:
         frames = self.perception.get_last_debug_frames()
-        for frame in frames:
+        for cam_idx, frame in enumerate(frames):
             rgb = frame.get("rgb")
             if rgb is None:
                 continue
-            mask = frame.get("mask")
             overlay = rgb.copy()
-            if mask is not None:
-                if mask.shape != overlay.shape[:2]:
-                    mask = None
-                else:
-                    green = np.zeros_like(overlay)
-                    green[..., 1] = 255
-                    overlay = np.where(
-                        mask[..., None].astype(bool),
-                        (0.3 * overlay + 0.7 * green).astype(overlay.dtype),
-                        overlay,
-                    )
-            bgr = overlay[..., ::-1]
-            cam_idx = frame.get("camera_index", 0)
-            cv2.imshow(f"policy_masks_cam{cam_idx}", bgr)
-        cv2.waitKey(1)
+            mask = frame.get("mask")
+            if mask is not None and mask.shape == overlay.shape[:2]:
+                green = np.zeros_like(overlay)
+                green[..., 1] = 255
+                overlay = np.where(
+                    mask[..., None].astype(bool),
+                    (0.3 * overlay + 0.7 * green).astype(overlay.dtype),
+                    overlay,
+                )
+            bgr = overlay[..., ::-1] if overlay.ndim == 3 and overlay.shape[2] == 3 else overlay
+            bgr = np.ascontiguousarray(bgr)
+            serial = frame.get("serial", f"cam{cam_idx}")
+            safe_serial = "".join(
+                ch if (ch.isalnum() or ch in "-_") else "_" for ch in str(serial)
+            )
+            label = f"step={step_idx} raw={grip_raw:.3f} grip={int(grip_bin)}"
+            cv2.putText(
+                bgr,
+                label,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            filename = out_dir / f"step_{step_idx:04d}_{safe_serial}.png"
+            cv2.imwrite(str(filename), bgr)
 
     def _print_frame_sanity(self, T_w_e: np.ndarray, pcd_ee: np.ndarray) -> None:
         print("Frame sanity:")
@@ -316,15 +329,14 @@ class InstantPolicyDeployment:
             T_offset[:3, 3] = offset
             T_w_flange = T_w_e @ np.linalg.inv(T_offset)
             delta = T_w_e[:3, 3] - T_w_flange[:3, 3]
-            print(f"  tcp_offset_in_code=True, tcp_offset_m={offset.tolist()}")
-            print(f"  T_w_e (tip, used by policy) pos: {np.round(T_w_e[:3, 3], 4)}")
+            print(f"  policy_offset_in_code=True, flange_to_policy_origin_m={offset.tolist()}")
+            print(f"  T_w_e (policy origin) pos: {np.round(T_w_e[:3, 3], 4)}")
             print(f"  T_w_flange (offset removed) pos: {np.round(T_w_flange[:3, 3], 4)}")
             print(
-                "  tip-flange in world:",
+                "  policy-origin minus flange in world:",
                 np.round(delta, 4),
                 f"(norm {np.linalg.norm(delta):.4f} m)",
             )
-            print("  Note: if robot TCP is already set to the tip, disable tcp_offset_in_code.")
         else:
             print("  tcp_offset_in_code=False; T_w_e is RTDE-reported TCP pose.")
             print(f"  T_w_e pos: {np.round(T_w_e[:3, 3], 4)}")

@@ -24,7 +24,6 @@ def _load(path: Path):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect a demo.pkl and print selected waypoint frames.")
     parser.add_argument("--demo", required=True, help="Path to demo .pkl")
-    parser.add_argument("--num-waypoints", type=int, default=10, help="Waypoint count L (default: 10)")
     args = parser.parse_args()
 
     demo = _load(Path(args.demo))
@@ -65,13 +64,10 @@ def main() -> None:
             u, c = np.unique(np.asarray(non_none, dtype=np.int64), return_counts=True)
             print("grip_objs unique + counts:", (u, c))
 
-    grip_objs_arr = np.asarray(grip_objs, dtype=np.int64) if grip_objs else None
     idx = extract_waypoints(
         np.asarray(T_w_es, dtype=np.float64),
         np.asarray(grips, dtype=np.float64) if grips else np.zeros(len(T_w_es), dtype=np.float64),
-        num_waypoints=int(args.num_waypoints),
-        grip_objs=grip_objs_arr,
-        require_grip_objs=True,
+        num_waypoints=10,
     )
     print("\nSelected waypoint frames:")
     for wp_i, frame_idx in enumerate(idx):

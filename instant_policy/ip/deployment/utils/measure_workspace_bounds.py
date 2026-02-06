@@ -4,28 +4,11 @@ import time
 from typing import Optional
 
 import numpy as np
-
-try:
-    import rtde_receive
-except Exception as exc:  # pragma: no cover - optional dependency
-    rtde_receive = None
-    _RTDE_IMPORT_ERROR = exc
-else:
-    _RTDE_IMPORT_ERROR = None
-
-try:
-    import rtde_control
-except Exception:  # pragma: no cover - optional dependency
-    rtde_control = None
-
-
-def _require_rtde():
-    if rtde_receive is None:
-        raise ImportError(f"ur_rtde is required: {_RTDE_IMPORT_ERROR}")
+import rtde_control
+import rtde_receive
 
 
 def main():
-    _require_rtde()
     parser = argparse.ArgumentParser(
         description="Measure TCP workspace bounds by moving the robot in freedrive."
     )
@@ -53,8 +36,6 @@ def main():
     rtde_r = rtde_receive.RTDEReceiveInterface(args.robot_ip)
     rtde_c = None
     if args.freedrive:
-        if rtde_control is None:
-            raise ImportError("rtde_control is required for --freedrive")
         rtde_c = rtde_control.RTDEControlInterface(args.robot_ip)
         rtde_c.freedriveMode()
     period = 1.0 / max(args.hz, 1e-3)
@@ -81,8 +62,8 @@ def main():
         if rtde_c is not None:
             try:
                 rtde_c.endFreedriveMode()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[warn] Failed to end Freedrive mode cleanly: {exc}")
 
     if not np.isfinite(min_xyz).all() or not np.isfinite(max_xyz).all():
         raise RuntimeError("No valid TCP samples collected.")

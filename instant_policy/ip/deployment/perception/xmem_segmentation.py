@@ -1,16 +1,21 @@
-import os
-import sys
 from typing import Optional
 
 import numpy as np
+import torch
 
 
-def _ensure_xmem_on_path():
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-    xmem_path = os.path.join(repo_root, "XMem2-main")
-    if xmem_path not in sys.path:
-        sys.path.insert(0, xmem_path)
-    return xmem_path
+def _import_xmem_modules():
+    try:
+        from model.network import XMem
+        from util.configuration import VIDEO_INFERENCE_CONFIG
+        from dataset.range_transform import im_normalization
+        from inference.inference_core import InferenceCore
+        return XMem, VIDEO_INFERENCE_CONFIG, im_normalization, InferenceCore
+    except Exception as exc:
+        raise ImportError(
+            "XMem2 modules are not importable. Add XMem2 root to PYTHONPATH "
+            "(for example with a .pth file in your active environment)."
+        ) from exc
 
 
 class XMemOnlineSegmenter:
@@ -23,13 +28,9 @@ class XMemOnlineSegmenter:
         sam_config=None,
         config_overrides: Optional[dict] = None,
     ):
-        _ensure_xmem_on_path()
+        XMem, VIDEO_INFERENCE_CONFIG, im_normalization, InferenceCore = _import_xmem_modules()
         if device is None:
-            try:
-                import torch
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-            except Exception:
-                device = "cpu"
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         device_str = str(device)
         if not device_str.startswith("cuda"):
             raise RuntimeError("XMem++ requires CUDA for real-time use")
@@ -37,11 +38,6 @@ class XMemOnlineSegmenter:
             raise RuntimeError("XMem++ inference expects device cuda:0")
         if device_str == "cuda":
             device = "cuda:0"
-
-        from model.network import XMem
-        from util.configuration import VIDEO_INFERENCE_CONFIG
-        from dataset.range_transform import im_normalization
-        import torch
 
         if not checkpoint_path:
             raise ValueError("XMem++ checkpoint_path is required")
@@ -66,7 +62,6 @@ class XMemOnlineSegmenter:
             pretrained_value_encoder=False,
         ).to(self._device).eval()
 
-        from inference.inference_core import InferenceCore
         self._processors = [InferenceCore(self._network, config) for _ in range(num_cameras)]
         self._labels = [1]
 
@@ -91,16 +86,23 @@ class XMemOnlineSegmenter:
 
         self._torch = torch
 
-    def segment_camera(self, rgb: np.ndarray, camera_index: int) -> Optional[np.ndarray]:
+    def segment_camera(self, rgb: np.ndarray, camera_index: int) -> np.ndarray:
         if camera_index >= self._num_cameras:
-            return None
+            raise IndexError(
+                f"camera_index {camera_index} out of range for XMem segmenter with {self._num_cameras} cameras."
+            )
 
         if not self._initialized[camera_index]:
             if self._sam is None:
-                return None
+                raise RuntimeError(
+                    f"XMem camera {camera_index} is not initialized and SAM seeding is disabled. "
+                    "Run manual seeding first."
+                )
             mask = self._sam.segment(rgb)
             if mask is None or mask.sum() == 0:
-                return None
+                raise RuntimeError(
+                    f"SAM failed to produce a non-empty seed mask for XMem camera {camera_index}."
+                )
             self._initialize(camera_index, rgb, mask)
             return mask.astype(np.uint8)
 
@@ -108,7 +110,9 @@ class XMemOnlineSegmenter:
 
     def initialize_camera(self, camera_index: int, rgb: np.ndarray, mask: np.ndarray) -> None:
         if camera_index >= self._num_cameras:
-            return
+            raise IndexError(
+                f"camera_index {camera_index} out of range for XMem segmenter with {self._num_cameras} cameras."
+            )
         self._initialize(camera_index, rgb, mask)
 
     def _initialize(self, camera_index: int, rgb: np.ndarray, mask: np.ndarray) -> None:
@@ -122,13 +126,13 @@ class XMemOnlineSegmenter:
             processor.put_to_permanent_memory(image_t, mask_t, ti=0)
         self._initialized[camera_index] = True
 
-    def _track(self, camera_index: int, rgb: np.ndarray) -> Optional[np.ndarray]:
+    def _track(self, camera_index: int, rgb: np.ndarray) -> np.ndarray:
         processor = self._processors[camera_index]
         image_t = self._prepare_image(rgb)
         with self._torch.no_grad():
             prob = processor.step(image_t, mask=None, valid_labels=None)
         if prob is None:
-            return None
+            raise RuntimeError(f"XMem tracking returned no probabilities for camera {camera_index}.")
         pred = self._torch.argmax(prob, dim=0).detach().cpu().numpy().astype(np.uint8)
         return (pred > 0).astype(np.uint8)
 

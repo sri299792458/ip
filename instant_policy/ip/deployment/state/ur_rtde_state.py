@@ -1,17 +1,10 @@
 from typing import Optional
 
 import numpy as np
+import rtde_receive
 from scipy.spatial.transform import Rotation
 
-try:
-    import rtde_receive
-except Exception as exc:  # pragma: no cover - optional dependency
-    rtde_receive = None
-    _RTDE_IMPORT_ERROR = exc
-else:
-    _RTDE_IMPORT_ERROR = None
-
-from ip.deployment.ur.robotiq_gripper import RobotiqGripper
+from ip.deployment.control.robotiq_gripper import RobotiqGripper
 
 
 class URRTDEState:
@@ -22,8 +15,6 @@ class URRTDEState:
         tcp_offset_in_code: bool = False,
         tcp_offset_m: Optional[np.ndarray] = None,
     ):
-        if rtde_receive is None:
-            raise ImportError(f"ur_rtde is required: {_RTDE_IMPORT_ERROR}")
         self._rtde = rtde
         self._gripper = gripper
         self._tcp_offset_in_code = tcp_offset_in_code
@@ -31,8 +22,6 @@ class URRTDEState:
 
     @staticmethod
     def connect(robot_ip: str) -> "rtde_receive.RTDEReceiveInterface":
-        if rtde_receive is None:
-            raise ImportError(f"ur_rtde is required: {_RTDE_IMPORT_ERROR}")
         return rtde_receive.RTDEReceiveInterface(robot_ip)
 
     def get_T_w_e(self) -> np.ndarray:
@@ -46,12 +35,12 @@ class URRTDEState:
             T = T @ T_offset
         return T
 
-    def get_gripper_state(self, default: float = 0.5) -> float:
+    def get_gripper_state(self) -> float:
         if self._gripper is None:
-            return default
-        pos = self._gripper.get_position_normalized()
-        if pos is None:
-            return default
+            raise RuntimeError("Robotiq gripper is not available for gripper state feedback.")
+        pos = float(self._gripper.get_position_normalized())
+        if not np.isfinite(pos):
+            raise RuntimeError(f"Non-finite Robotiq normalized position: {pos}")
         # Map Robotiq normalized position (0=open, 1=closed) to model convention (1=open, 0=closed).
         return float(1.0 - pos)
 
@@ -60,10 +49,4 @@ class URRTDEState:
             if require:
                 raise RuntimeError("Robotiq gripper is not available for OBJ feedback.")
             return None
-        try:
-            obj = self._gripper.get_object_status()
-        except Exception:
-            obj = None
-        if obj is None and require:
-            raise RuntimeError("Robotiq OBJ feedback is required but missing.")
-        return None if obj is None else int(obj)
+        return int(self._gripper.get_object_status())

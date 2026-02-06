@@ -2,12 +2,8 @@ import logging
 from typing import Optional
 
 import numpy as np
-
-try:
-    from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
-except Exception:  # pragma: no cover - optional dependency
-    SamAutomaticMaskGenerator = None
-    sam_model_registry = None
+import torch
+from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
 
 class SAMSegmenter:
@@ -22,8 +18,6 @@ class SAMSegmenter:
         min_mask_region_area: int = 256,
         select_largest: bool = True,
     ):
-        if sam_model_registry is None or SamAutomaticMaskGenerator is None:
-            raise ImportError("segment_anything is not available")
         if not checkpoint_path:
             raise ValueError("SAM checkpoint_path is required")
         if model_type not in sam_model_registry:
@@ -79,11 +73,7 @@ def build_segmenter(config, device: Optional[str] = None, num_cameras: Optional[
     if backend != "sam":
         raise ValueError(f"Unknown segmentation backend: {backend}")
     if device is None:
-        try:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            device = "cpu"
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     return SAMSegmenter(
         model_type=config.model_type,
         checkpoint_path=config.sam_checkpoint_path or config.checkpoint_path,

@@ -2,18 +2,11 @@ import time
 from typing import Optional
 
 import numpy as np
+import rtde_control
 from scipy.spatial.transform import Rotation
 
-try:
-    import rtde_control
-except Exception as exc:  # pragma: no cover - optional dependency
-    rtde_control = None
-    _RTDE_IMPORT_ERROR = exc
-else:
-    _RTDE_IMPORT_ERROR = None
-
 from ip.deployment.config import GripperConfig, RTDEControlConfig
-from ip.deployment.ur.robotiq_gripper import RobotiqGripper
+from ip.deployment.control.robotiq_gripper import RobotiqGripper
 
 
 class URRTDEControl:
@@ -26,19 +19,17 @@ class URRTDEControl:
         tcp_offset_in_code: bool = False,
         tcp_offset_m: Optional[np.ndarray] = None,
     ):
-        if rtde_control is None:
-            raise ImportError(f"ur_rtde is required: {_RTDE_IMPORT_ERROR}")
         self._rtde = rtde
         self._cfg = control_config
         self._gripper = gripper
-        self._gripper_cfg = gripper_config or GripperConfig()
+        self._gripper_cfg = gripper_config or GripperConfig(enable=gripper is not None)
+        if self._gripper_cfg.enable and self._gripper is None:
+            raise ValueError("Gripper is enabled but no RobotiqGripper instance was provided.")
         self._tcp_offset_in_code = tcp_offset_in_code
         self._tcp_offset_m = tcp_offset_m
 
     @staticmethod
     def connect(robot_ip: str, control_config: RTDEControlConfig) -> "rtde_control.RTDEControlInterface":
-        if rtde_control is None:
-            raise ImportError(f"ur_rtde is required: {_RTDE_IMPORT_ERROR}")
         return rtde_control.RTDEControlInterface(robot_ip, control_config.frequency_hz)
 
     def execute_pose(self, T_w_e: np.ndarray) -> bool:
@@ -71,8 +62,10 @@ class URRTDEControl:
         return True
 
     def execute_gripper(self, command: float) -> None:
-        if self._gripper is None or not self._gripper_cfg.enable:
+        if not self._gripper_cfg.enable:
             return
+        if self._gripper is None:
+            raise RuntimeError("Gripper command requested but RobotiqGripper is not available.")
         # Convention: command >= 0.5 means OPEN, < 0.5 means CLOSED.
         if command > 0.5:
             self._gripper.open(speed=self._gripper_cfg.speed, force=self._gripper_cfg.force)

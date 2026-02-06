@@ -1,6 +1,5 @@
 import socket
 import time
-from typing import Optional
 
 
 class RobotiqGripper:
@@ -28,7 +27,7 @@ class RobotiqGripper:
         self._socket = None
         self._open_position = open_position
         self._closed_position = closed_position
-        self._last_position: Optional[int] = None
+        self._last_position: int | None = None
 
     @property
     def open_position(self) -> int:
@@ -80,13 +79,16 @@ class RobotiqGripper:
         self._set_var(self.ACT, 1)
         time.sleep(0.5)
         # STA can take a moment to reach 3 after activation.
+        last_error: Exception | None = None
         for _ in range(6):
             try:
                 if self._get_var(self.STA) == 3:
                     return
-            except Exception:
-                pass
+            except Exception as exc:
+                last_error = exc
             time.sleep(0.5)
+        if last_error is not None:
+            raise RuntimeError(f"Robotiq gripper did not activate: {last_error}") from last_error
         raise RuntimeError("Robotiq gripper did not activate")
 
     def move(self, position: int, speed: int = 255, force: int = 100) -> None:
@@ -107,29 +109,23 @@ class RobotiqGripper:
     def close(self, speed: int = 255, force: int = 100) -> None:
         self.move(self._closed_position, speed=speed, force=force)
 
-    def get_position(self) -> Optional[int]:
-        try:
-            return self._get_var(self.POS)
-        except Exception:
-            return None
+    def get_position(self) -> int:
+        return self._get_var(self.POS)
 
-    def get_position_normalized(self) -> Optional[float]:
+    def get_position_normalized(self) -> float:
         pos = self.get_position()
-        if pos is None:
-            return None
         denom = float(self._closed_position - self._open_position)
         if denom <= 0:
-            return None
+            raise ValueError(
+                "Invalid gripper calibration: closed_position must be greater than open_position."
+            )
         return (pos - self._open_position) / denom
 
-    def get_status(self) -> Optional[int]:
+    def get_status(self) -> int:
         """Return gripper status (STA) if available."""
-        try:
-            return self._get_var(self.STA)
-        except Exception:
-            return None
+        return self._get_var(self.STA)
 
-    def get_object_status(self) -> Optional[int]:
+    def get_object_status(self) -> int:
         """Return object detection status (OBJ) if available.
 
         Typical Robotiq meanings:
@@ -138,7 +134,4 @@ class RobotiqGripper:
           2 = stopped on inner contact
           3 = at requested position (no object)
         """
-        try:
-            return self._get_var(self.OBJ)
-        except Exception:
-            return None
+        return self._get_var(self.OBJ)

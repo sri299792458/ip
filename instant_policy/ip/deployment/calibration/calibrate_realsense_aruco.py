@@ -6,36 +6,12 @@ Outputs T_world_camera for each serial using multi-sample averaging.
 """
 import argparse
 import json
-import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
-
-try:
-    import cv2
-except Exception as exc:  # pragma: no cover - optional dependency
-    cv2 = None
-    _CV2_IMPORT_ERROR = exc
-else:
-    _CV2_IMPORT_ERROR = None
-
-try:
-    import pyrealsense2 as rs
-except Exception as exc:  # pragma: no cover - optional dependency
-    rs = None
-    _RS_IMPORT_ERROR = exc
-else:
-    _RS_IMPORT_ERROR = None
-
-
-def _require_deps():
-    if rs is None:
-        raise ImportError(f"pyrealsense2 is required: {_RS_IMPORT_ERROR}")
-    if cv2 is None:
-        raise ImportError(f"OpenCV is required: {_CV2_IMPORT_ERROR}")
-    if not hasattr(cv2, "aruco"):
-        raise ImportError("cv2.aruco is missing. Install opencv-contrib-python.")
+import pyrealsense2 as rs
 
 
 def _aruco_dict(name: str):
@@ -238,7 +214,6 @@ def _calibrate_camera(
     num_samples: int,
     max_frames: int,
     max_reproj_error: float,
-    sleep_sec: float,
 ) -> Dict:
     pipeline, K, dist = _start_pipeline(serial, width, height, fps)
     try:
@@ -274,9 +249,6 @@ def _calibrate_camera(
             translations.append(T_world_cam[:3, 3])
             reproj_errors.append(reproj_err)
 
-            if sleep_sec > 0:
-                time.sleep(sleep_sec)
-
         if not rotations:
             raise RuntimeError(
                 f"No valid detections for serial {serial}. "
@@ -306,13 +278,35 @@ def _calibrate_camera(
     finally:
         try:
             pipeline.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[warn] Failed to stop pipeline for serial {serial}: {exc}")
+
+
+def _default_world_tag_path(arm: str) -> Path:
+    filename = "world_tag_right.json" if arm == "right" else "world_tag.json"
+    return Path(__file__).resolve().parent / "outputs" / filename
+
+
+def _default_out_path(arm: str) -> Path:
+    filename = "realsense_T_world_camera_right.json" if arm == "right" else "realsense_T_world_camera.json"
+    return Path(__file__).resolve().parent / "outputs" / filename
 
 
 def _parse_world_tag(args) -> np.ndarray:
     if args.world_tag_matrix:
         path = Path(args.world_tag_matrix)
+    elif args.world_tag is None:
+        path = _default_world_tag_path(args.arm)
+        if not path.exists():
+            raise ValueError(
+                f"Provide --world-tag or --world-tag-matrix. Default for --arm {args.arm!r} "
+                f"not found: {path}"
+            )
+        print(f"Using default world-tag matrix for --arm {args.arm}: {path}")
+    else:
+        path = None
+
+    if path is not None:
         if path.suffix.lower() in {".npy", ".npz"}:
             T = np.load(path)
         else:
@@ -323,8 +317,6 @@ def _parse_world_tag(args) -> np.ndarray:
             raise ValueError("world_tag_matrix must be 4x4")
         return T
 
-    if args.world_tag is None:
-        raise ValueError("Provide --world-tag or --world-tag-matrix")
     x, y, z, roll_deg, pitch_deg, yaw_deg = args.world_tag
     R = _rpy_to_matrix(
         np.deg2rad(roll_deg), np.deg2rad(pitch_deg), np.deg2rad(yaw_deg)
@@ -336,9 +328,16 @@ def _parse_world_tag(args) -> np.ndarray:
 
 
 def main():
-    _require_deps()
+    if not hasattr(cv2, "aruco"):
+        raise ImportError("cv2.aruco is missing. Install opencv-contrib-python.")
     parser = argparse.ArgumentParser(
         description="Calibrate RealSense camera(s) to ArUco marker pose in world frame."
+    )
+    parser.add_argument(
+        "--arm",
+        choices=["left", "right"],
+        default="left",
+        help="Arm side used for default world-tag and output file naming.",
     )
     parser.add_argument("--serial", action="append", required=True, help="RealSense serial")
     parser.add_argument("--tag-dict", default="DICT_4X4_50", help="ArUco dictionary name")
@@ -364,18 +363,11 @@ def main():
     parser.add_argument("--num-samples", type=int, default=30)
     parser.add_argument("--max-frames", type=int, default=300)
     parser.add_argument("--max-reproj-error", type=float, default=2.0)
-    parser.add_argument("--sleep-sec", type=float, default=0.0)
     parser.add_argument(
         "--out",
         type=str,
         default=None,
-        help="Output JSON path (default: ip/deployment/calibration_outputs/...)",
-    )
-    parser.add_argument(
-        "--arm",
-        choices=["left", "right"],
-        default=None,
-        help="Convenience suffix for output file name (e.g. realsense_T_world_camera_left.json).",
+        help="Output JSON path (default depends on --arm).",
     )
     args = parser.parse_args()
 
@@ -411,7 +403,6 @@ def main():
             num_samples=args.num_samples,
             max_frames=args.max_frames,
             max_reproj_error=args.max_reproj_error,
-            sleep_sec=args.sleep_sec,
         )
         results["cameras"][serial] = {
             "T_world_camera": stats["T_world_camera"].tolist(),
@@ -438,12 +429,7 @@ def main():
     if args.out:
         out_path = Path(args.out)
     else:
-        out_dir = Path(__file__).resolve().parent / "calibration_outputs"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if args.arm:
-            out_path = out_dir / f"realsense_T_world_camera_{args.arm}.json"
-        else:
-            out_path = out_dir / "realsense_T_world_camera.json"
+        out_path = _default_out_path(args.arm)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:

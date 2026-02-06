@@ -65,28 +65,31 @@ This installs:
 pip install pyg-lib -f https://data.pyg.org/whl/torch-2.2.0+cu118.html
 ```
 
-### 2.3 Register the `ip` Package
+### 2.3 Install `ip` Package + Deployment Extras
 ```bash
 cd /path/to/instant_policy
-pip install -e .
+pip install -e ".[deployment,segmentation]"
 ```
 
-> **Note**: This only registers the package name so you can `import ip` from anywhere.
-> It shows "0 packages installed" because `setup.py` has no dependencies listed -
-> all actual dependencies come from `environment.yml` (already installed in Step 2.1).
+This installs deployment-layer Python dependencies in one command:
+- `ur_rtde`
+- `pynput`
+- `opencv-python`
+- `viser`
+- `gdown`
+- `segment-anything`
 
-### 2.4 Install ur_rtde (for robot control)
-```bash
-pip install ur_rtde
-```
+Import policy:
+- Deployment modules use direct imports for these dependencies.
+- Missing packages now fail immediately at startup (no optional import fallback path).
 
-### 2.5 Install Intel RealSense SDK + Viewer + Python bindings (Conda-local)
+### 2.4 Install Intel RealSense SDK + Viewer + Python bindings (Conda-local)
 This flow builds librealsense inside your conda env and avoids system-wide installs.
 Only two steps touch the system:
 - Installing build/GUI deps via `apt-get` (required)
 - Installing a udev rule to persist USB permissions (recommended for non-root access)
 
-#### 2.5.1 System build + GUI dependencies (safe global install)
+#### 2.4.1 System build + GUI dependencies (safe global install)
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
@@ -96,7 +99,7 @@ sudo apt-get install -y \
   libgl1-mesa-dev libglu1-mesa-dev
 ```
 
-#### 2.5.2 Build librealsense (RSUSB) into your conda env (includes viewer + tools + python modules)
+#### 2.4.2 Build librealsense (RSUSB) into your conda env (includes viewer + tools + python modules)
 ```bash
 conda activate ip_env
 
@@ -122,7 +125,7 @@ make -j"$(nproc)"
 make install
 ```
 
-#### 2.5.3 If build fails with uint64_t / `<cstdint>` (Ubuntu 24.04+ sometimes)
+#### 2.4.3 If build fails with uint64_t / `<cstdint>` (Ubuntu 24.04+ sometimes)
 If you see errors mentioning `uint64_t` not declared in:
 `third-party/rsutils/include/rsutils/version.h`, apply:
 ```bash
@@ -134,7 +137,7 @@ make -j"$(nproc)"
 make install
 ```
 
-#### 2.5.4 Make `pyrealsense2` importable in the env
+#### 2.4.4 Make `pyrealsense2` importable in the env
 `make install` places Python extension modules into `$CONDA_PREFIX/OFF/`. Copy them into your env’s site-packages:
 ```bash
 conda activate ip_env
@@ -145,7 +148,7 @@ cp -av "$CONDA_PREFIX/OFF/pybackend2"*.so* "$SITEPKG/" 2>/dev/null || true
 cp -av "$CONDA_PREFIX/OFF/pyrsutils"*.so*   "$SITEPKG/" 2>/dev/null || true
 ```
 
-#### 2.5.5 Ensure the env finds the correct runtime libs
+#### 2.4.5 Ensure the env finds the correct runtime libs
 ```bash
 conda activate ip_env
 
@@ -158,7 +161,7 @@ conda deactivate
 conda activate ip_env
 ```
 
-#### 2.5.6 Verify installation (viewer + CLI + Python)
+#### 2.4.6 Verify installation (viewer + CLI + Python)
 ```bash
 conda activate ip_env
 
@@ -172,7 +175,7 @@ realsense-viewer
 python -c "import pyrealsense2 as rs; print('OK', rs.__version__); print('devices', len(rs.context().query_devices()))"
 ```
 
-#### 2.5.7 USB permissions (shared systems)
+#### 2.4.7 USB permissions (shared systems)
 If `rs-enumerate-devices` or `realsense-viewer` shows no device detected but the camera is visible in `lsusb`, you likely lack access to the USB node.
 After reboot or replug, `/dev/bus/usb/...` is recreated, so permissions can regress without a udev rule.
 
@@ -196,17 +199,11 @@ rs-enumerate-devices
 No-global-change alternative (not persistent):
 - Use `sudo` (and pass `LD_LIBRARY_PATH` if needed) or ask an admin to apply temporary ACLs
 
-#### 2.5.8 Optional sanity check
+#### 2.4.8 Optional sanity check
 Confirm you are using the env-local binaries:
 ```bash
 command -v realsense-viewer
 ldd "$(which realsense-viewer)" | grep librealsense
-```
-
-
-### 2.6 Install hotkey listener (demo control)
-```bash
-pip install pynput
 ```
 
 ---
@@ -214,13 +211,10 @@ pip install pynput
 ## Step 3: Download Model Weights
 
 ### 3.1 Instant Policy Pre-trained Weights
-Use the official download script (requires `gdown`):
+Use the official download script:
 
 ```bash
 cd /path/to/instant_policy
-
-# Install gdown if not already installed
-pip install gdown
 
 # Download pre-trained model
 bash ip/scripts/download_weights.sh
@@ -241,10 +235,6 @@ cd checkpoints/sam
 # Download SAM ViT-B (default for Instant Policy)
 wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
 ```
-Install the SAM Python package:
-```bash
-pip install "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git"
-```
 
 ### 3.3 XMem Weights (for video object tracking)
 ```bash
@@ -259,9 +249,7 @@ wget https://github.com/hkchengrex/XMem/releases/download/v1.0/XMem.pth
 
 ## Step 4: Setup XMem++ (XMem2) Repository
 
-XMem++ (XMem2) must be cloned and available on the Python path.
-
-> **Note**: The code expects the directory to be named `XMem2-main`.
+XMem++ (XMem2) must be cloned and added to your environment's Python path.
 
 ```bash
 cd /path/to/instant_policy
@@ -272,6 +260,10 @@ git clone https://github.com/mbzuai-metaverse/XMem2.git XMem2-main
 # Put the XMem weights in XMem2-main/saves/
 mkdir -p XMem2-main/saves
 cp checkpoints/xmem/XMem.pth XMem2-main/saves/
+
+# Register XMem2 import path in this conda env (persistent for ip_env)
+SITEPKG="$(python -c 'import site; print(site.getsitepackages()[0])')"
+echo "/path/to/instant_policy/XMem2-main" > "$SITEPKG/xmem2.pth"
 
 # Verify structure:
 # instant_policy/
@@ -284,18 +276,27 @@ cp checkpoints/xmem/XMem.pth XMem2-main/saves/
 #   └── ip/
 ```
 
+Verification:
+```bash
+python -c "from model.network import XMem; print('XMem2 import OK')"
+```
+
 ---
 
 ## Step 5: Camera Calibration
+
+Calibration utilities are grouped under `ip/deployment/calibration/` and are invoked as modules.
 
 ### 5.0 Hardware + Calibration Summary (Current Setup)
 
 **Hardware Configuration**
 - Robot gripper: Robotiq 2F-85
-- Gripper TCP offset (Z): `0.162 m` (162 mm)
-  - This is the **tip offset from the flange** along the tool Z axis (used when you want to convert flange poses to tip/contact points).
-  - **Deployment runs in FLANGE frame by default** (`FRAME = FLANGE`, `tcp_offset_in_code=False`, CLI: `--frame flange`).
-  - Only use the offset in code if you explicitly choose `--frame tip` (or set `tcp_offset_in_code=True` in config).
+- Calibration contact offset from flange (Z): `0.162 m` (162 mm)
+  - This is used only to convert flange poses to contact points in calibration tools.
+  - Robot RTDE TCP is treated as **always flange**.
+  - Deployment uses a fixed runtime offset from flange to policy origin.
+  - Runtime default is `--flange-to-policy-origin-m 0 0 0.088` (applied in code).
+  - This same 0.162 value is used in calibration utilities (for flange-pose corner touches).
 - Camera 1 serial: `f1380660`
 - Camera 2 serial: `f1371463`
 - ArUco marker:
@@ -306,24 +307,28 @@ cp checkpoints/xmem/XMem.pth XMem2-main/saves/
 **World Tag Measurements (Robot Base Frame)**
 **Convention:** ArUco CCW_center (origin at tag center; TL has +Y / TR has +X).
 Measured by touching the ArUco marker corners with the closed gripper (Feature: Base).
-You can record either:
-- **3 values**: x y z (already tip/contact position in base), OR
-- **6 values**: x y z rx ry rz (flange pose from RTDE; recommended when robot TCP is flange).
+Record each corner as a **6D flange pose** from RTDE (`x y z rx ry rz`).
 
-If you pass 6D flange poses, `compute_world_tag.py` will apply the `0 0 0.162` TCP offset by default to convert flange poses to the contact tip position.
-- Top-Left (TL): x = `-0.4646`, y = `0.5282`, z = `-0.2563`
-- Top-Right (TR): x = `-0.4661`, y = `0.5283`, z = `-0.3048`
-- Bottom-Left (BL): x = `-0.5143`, y = `0.5289`, z = `-0.2552`
+Corner order is:
+- Top-Left (TL)
+- Top-Right (TR)
+- Bottom-Right (BR)
+- Bottom-Left (BL)
 
-Compute `world_tag.json` from these three points (ArUco frame: X = TL→TR, Y = BL→TL).
-If you pass 6D flange poses, the script applies the 0.162 m TCP offset by default (disable with `--no-tcp-offset`).
+`ip.deployment.calibration.compute_world_tag` now uses all four corners and computes `T_world_tag` with a best-fit plane/frame.
+The script applies `--flange-to-contact-m` (default `0 0 0.162`) to convert flange positions to contact points before fitting.
+Compute `world_tag.json` from all four corners (ArUco frame: X = TL->TR, Y = BL->TL, Z = X x Y).
+Arm-aware defaults:
+- `--arm left` -> `ip/deployment/calibration/outputs/world_tag.json`
+- `--arm right` -> `ip/deployment/calibration/outputs/world_tag_right.json`
 ```bash
-python compute_world_tag.py \
-  --tl -0.4646 0.5282 -0.2563 \
-  --tr -0.4661 0.5283 -0.3048 \
-  --bl -0.5143 0.5289 -0.2552 \
-  --tag-size 0.05 \
-  --out world_tag.json
+python -m ip.deployment.calibration.compute_world_tag \
+  --arm left \
+  --tl <x_tl> <y_tl> <z_tl> <rx_tl> <ry_tl> <rz_tl> \
+  --tr <x_tr> <y_tr> <z_tr> <rx_tr> <ry_tr> <rz_tr> \
+  --br <x_br> <y_br> <z_br> <rx_br> <ry_br> <rz_br> \
+  --bl <x_bl> <y_bl> <z_bl> <rx_bl> <ry_bl> <rz_bl> \
+  --tag-size 0.05
 ```
 
 Calculated `world_tag.json` (T_world_tag):
@@ -337,16 +342,19 @@ Calculated `world_tag.json` (T_world_tag):
 **Camera Extrinsics (World → Camera)**
 Command used:
 ```bash
-python calibrate_realsense_aruco.py \
+python -m ip.deployment.calibration.calibrate_realsense_aruco \
+  --arm left \
   --serial f1380660 \
   --serial f1371463 \
   --tag-dict DICT_6X6_50 \
   --tag-id 5 \
   --tag-size 0.05 \
-  --world-tag-matrix world_tag.json
+  --world-tag-matrix ip/deployment/calibration/outputs/world_tag.json
 ```
 
-Calibration results (saved to `realsense_T_world_camera.json`):
+Calibration results (saved to arm-specific default):
+- `--arm left` -> `realsense_T_world_camera.json`
+- `--arm right` -> `realsense_T_world_camera_right.json`
 
 Camera 1 (`f1380660`)
 - Position (approx): X = `-0.44 m`, Y = `1.17 m`, Z = `0.086 m`
@@ -369,11 +377,20 @@ Camera 2 (`f1371463`)
 ```
 
 **File Locations**
-- Tag calibration: `ip/deployment/world_tag.json`
-- Camera calibration: `ip/deployment/calibration_outputs/realsense_T_world_camera.json`
+- Tag calibration: `ip/deployment/calibration/outputs/world_tag.json`
+- Camera calibration: `ip/deployment/calibration/outputs/realsense_T_world_camera.json`
+- Right-arm variants append `_right` in the same folder.
+
+Calibration sanity check (click pixel -> world point, optional TCP comparison):
+```bash
+python -m ip.deployment.calibration.validate_click_point \
+  --arm left \
+  --serial <CAMERA_SERIAL> \
+  --robot-ip <UR_IP>
+```
 
 **Validation (Click‑to‑World vs TCP)**
-Example validation using `validate_click_point.py`:
+Example validation using `ip.deployment.calibration.validate_click_point`:
 ```
 Pixel (347,334) depth 0.7290 m
 Camera point: [0.0237, 0.1144, 0.7290] m
@@ -404,7 +421,7 @@ On the UR teach pendant:
 
 ### 6.3 Test Gripper Connection
 ```python
-from ip.deployment.ur.robotiq_gripper import RobotiqGripper
+from ip.deployment.control.robotiq_gripper import RobotiqGripper
 
 gripper = RobotiqGripper(host="10.33.55.90", port=63352)
 gripper.connect()
@@ -430,15 +447,15 @@ print("TCP Pose:", rtde_r.getActualTCPPose())
 rtde_c = rtde_control.RTDEControlInterface("10.33.55.90")
 print("RTDE Control connected!")
 ```
-**Note**: `getActualTCPPose()` returns the pose of the **active robot TCP** (flange by default). The deployment code applies the 162 mm offset when `tcp_offset_in_code=True`.
+**Note**: `getActualTCPPose()` returns the pose of the active robot TCP. In this deployment workflow, TCP is treated as **always flange**.
 If RTDE control fails, ensure the robot is in **Remote Control** and the motors are **ON** (brakes released).
-In this repo we default to `FRAME = FLANGE` (no TCP offset applied in code). Only use tip mode if you explicitly run `--frame tip` (or set `tcp_offset_in_code=True` in config).
+Policy origin is set relative to flange via CLI (`--flange-to-policy-origin-m`).
 
 ---
 
 ## Step 8: Create Deployment Configuration
 
-Create a configuration file or modify `ip/deployment.py`:
+Create a configuration file or modify `ip/deployment/cli.py`:
 
 ```python
 import numpy as np
@@ -525,9 +542,9 @@ config = DeploymentConfig(
    
     # Execution
     execute_until_grip_change=True,
-    # Frame convention (default in this repo)
-    tcp_offset_in_code=False,  # FLANGE frame everywhere
-    tcp_offset_m=np.array([0.0, 0.0, 0.162], dtype=np.float64),  # used only if tcp_offset_in_code=True
+    # Runtime frame convention (default in this repo)
+    tcp_offset_in_code=True,  # apply flange->policy-origin offset in code
+    tcp_offset_m=np.array([0.0, 0.0, 0.088], dtype=np.float64),  # flange->policy-origin offset
     device="cuda:0",
 )
 ```
@@ -535,14 +552,13 @@ config = DeploymentConfig(
 ### Waypoint selection (num_traj_wp)
 Each recorded demo is **downsampled to `num_traj_wp` waypoints** before being fed to the model. The selection is **not uniform** in time. The current logic in `extract_waypoints()`:
 - Always includes the **first** and **last** frame.
-- Adds frames where the **gripper state changes**.
-- Adds a waypoint when the robot **slows down / stops** (detected as a transition from moving -> slow), which marks important stages.
-- If still fewer than `num_traj_wp`, fills remaining slots by **splitting motion-heavy segments**.
+- Adds mandatory anchors at **gripper state transitions** and the frame just before each transition.
+- If still fewer than `num_traj_wp`, greedily fills by **splitting the segment with highest pose interpolation error**.
 
 This avoids wasting waypoints on long pauses (e.g., before you start moving) while still capturing stage boundaries.
-**Important:** gripper-change waypoints are detected from **Robotiq OBJ** feedback. Demos **must** include
-`grip_objs`; older demos without OBJ feedback are not supported for waypoint extraction.
-Live deployment also uses **OBJ** for the current gripper state; if OBJ is unavailable, deployment will error.
+**Important:** gripper-change waypoints are detected from the final binary `grips` signal.
+`grips` is derived from measured gripper openness (`get_gripper_state`) using RLBench-style binarization:
+open if `open_amount > 0.9`, else closed.
 
 ---
 
@@ -553,9 +569,9 @@ By default, `ip.deployment` will move the robot to a saved **home joint position
 
 If you haven't saved one yet:
 ```bash
-python -m ip.deployment.set_home_position --robot-ip <ROBOT_IP> --save-current
+python -m ip.deployment.utils.set_home_position --robot-ip <ROBOT_IP> --save-current
 ```
-This writes `ip/deployment/home_joint.json` (can be overridden with `--home`).
+This writes `ip/deployment/assets/home_joint.json`.
 
 To skip the home move, add `--no-home`.
 By default, the gripper is also opened before starting. To skip this, add `--no-open-gripper`.
@@ -564,40 +580,22 @@ By default, the gripper is also opened before starting. To skip this, add `--no-
 ```bash
 python -m ip.deployment --collect-demo --demo-out demos/task1_demo1.pkl
 ```
+For right-arm deployment, add `--arm right` so the default calibration file switches to `realsense_T_world_camera_right.json`.
 
-Optional: visualize live debugging outputs:
-```bash
-# Live masks
-python -m ip.deployment --demo demos/task1_demo1.pkl --viz masks
-
-# Live policy-frame point cloud (Viser at http://localhost:8080)
-python -m ip.deployment --demo demos/task1_demo1.pkl --viz pcd --viz-hz 10
-
-# Both
-python -m ip.deployment --demo demos/task1_demo1.pkl --viz both --viz-hz 10
-```
-
-Optional: **record** the live policy-frame point clouds for playback:
-```bash
-python -m ip.deployment --demo demos/task1_demo1.pkl \
-  --record-live-pcd
-```
-Replay with:
-```bash
-python -m ip.deployment.view_demo_pcds --demo ip/deployment/live_pcd_recording.pkl --policy-view
-```
-
-Optional: save RGB images for the selected waypoint frames (useful to verify `extract_waypoints()`):
+Optional: save RGB+mask images for the selected waypoint frames (useful to verify `extract_waypoints()`):
 ```bash
 python -m ip.deployment --collect-demo --demo-out demos/task1_demo1.pkl \
-  --debug-demo-waypoints \
-  --debug-demo-waypoints-dir ip/deployment/debug_waypoints \
-  --debug-demo-waypoints-num 10
+  --debug-demo-waypoints
 ```
+This writes waypoint debug images to `ip/deployment/debug_waypoints` using `num_traj_wp` waypoints.
+
+Frame metadata in saved demo:
+- `frame_spec`: robot TCP frame (fixed flange) and `flange_to_policy_origin_m`.
+- `recorded_at_utc`: demo timestamp.
 
 Quickly inspect which frames were selected (prints indices + EE positions):
 ```bash
-python -m ip.deployment.inspect_demo --demo demos/task1_demo1.pkl --num-waypoints 10
+python -m ip.deployment.utils.inspect_demo --demo demos/task1_demo1.pkl
 ```
 
 ### 9.2 Recording Process
@@ -624,16 +622,17 @@ python -m ip.deployment --demo demos/task1_demo1.pkl
 ```
 
 Defaults:
-- `--horizon-mode until-grip-change` (recommended; prevents gripper oscillation)
-- `--frame flange` (consistent flange frame everywhere)
+- executes predicted actions until gripper-state change (prevents gripper oscillation)
+- `--flange-to-policy-origin-m 0 0 0.088` (default)
+- `--arm left` (loads left-arm calibration by default)
 
-Override examples:
+Frame consistency check:
+- Demos must include `frame_spec` with `robot_tcp_frame=flange` and `flange_to_policy_origin_m`.
+- Deployment validates this strictly and fails on any mismatch or missing key.
+
+Override example:
 ```bash
-# Execute full predicted horizon every step (may cause gripper oscillation)
-python -m ip.deployment --demo demos/task1_demo1.pkl --horizon-mode full
-
-# Use tip frame (apply TCP offset in code)
-python -m ip.deployment --demo demos/task1_demo1.pkl --frame tip --tcp-offset-m 0 0 0.162
+python -m ip.deployment --demo demos/task1_demo1.pkl --flange-to-policy-origin-m 0 0 0.088
 ```
 
 ### 10.2 Multiple Demos
@@ -663,60 +662,70 @@ success = deployment.run(demos, max_steps=100)
 print("Deployment success:", success)
 ```
 
+### 10.4 Optional Live Outputs (Recommended for Audit)
+Save the live rollout in demo-compatible format (`pcds`, `T_w_es`, `grips`):
+```bash
+python -m ip.deployment --demo demos/task1_demo1.pkl \
+  --save-live
+```
+
+Replay the saved live rollout in EE-frame viewer:
+```bash
+python -m ip.deployment.utils.view_demo_pcds --demo ip/deployment/live.pkl
+```
+
+Save per-step live RGB+mask snapshots:
+```bash
+python -m ip.deployment --demo demos/task1_demo1.pkl \
+  --debug-live-frames
+```
+
+Live debug image overlay fields:
+- `step`: deployment step index
+- `raw`: measured gripper openness
+- `grip`: binarized gripper state (0/1)
+
+Design rule:
+- Debug images are saved as sidecar files only.
+- `demo.pkl` / `live.pkl` stay focused on policy data (`pcds`, `T_w_es`, `grips`).
+
+Deprecated/removed runtime debug paths:
+- `--viz`
+- `--viz-hz`
+- `--record-live-pcd`
+- `python -m ip.deployment.debug_segmentation`
+- `python -m ip.deployment.debug_xmem_tracking`
+- `python -m ip.deployment.view_demo_live_alignment`
+
 ---
 
 ## Debug Pipeline (recommended for every new setup)
 
-### D1. Debug segmentation masks (live)
-Use this to verify SAM/XMem++ masks look correct before collecting demos.
+### D1. Collect demo with optional waypoint RGB+mask export
 ```bash
-python -m ip.deployment.debug_segmentation
+python -m ip.deployment --collect-demo --demo-out demos/task1_demo1.pkl \
+  --debug-demo-waypoints
 ```
-Outputs images to `ip/deployment/debug_outputs`.
+This saves the selected waypoint frames as RGB+mask overlays for quick audit.
 
-### D2. Debug XMem++ tracking (live, manual seed)
-This verifies tracking over time (objects must move).
+### D2. Deploy with optional live outputs
 ```bash
-python -m ip.deployment.debug_xmem_tracking --frames 120 --sleep 0.2 --out-dir ip/deployment/debug_outputs
+python -m ip.deployment --demo demos/task1_demo1.pkl \
+  --save-live \
+  --debug-live-frames
 ```
+This produces:
+- `ip/deployment/live.pkl` (demo-compatible rollout with `pcds`, `T_w_es`, `grips`)
+- per-step RGB+mask overlays in `ip/deployment/debug_live_frames`
+- `live.pkl` also includes `frame_spec` and `recorded_at_utc` metadata.
 
-### D3. Inspect a collected demo (stats + visual PLYs)
-This checks the saved demo itself (point clouds + poses + grips).
+### D3. Replay `.pkl` point clouds in EE-frame viewer
 ```bash
-python -m ip.deployment.debug_demo \
-  --demo demos/task1_demo1.pkl \
-  --save-frames \
-  --save-ee \
-  --out-dir ip/deployment/debug_outputs
+python -m ip.deployment.utils.view_demo_pcds --demo demos/task1_demo1.pkl
+python -m ip.deployment.utils.view_demo_pcds --demo ip/deployment/live.pkl
 ```
-This writes a few PLYs (world + EE frame) into `ip/deployment/debug_outputs` for visual inspection.
-
-### D3.1 Play back demo frames (Viser, web-based)
-This plays the demo point clouds in a browser-based viewer.
-```bash
-pip install viser
-python -m ip.deployment.view_demo_pcds --demo demos/task1_demo1.pkl --stride 2 --fps 20
-```
-Open the URL shown in the terminal (default is `http://localhost:8080`).
-
-Optional TCP overlay:
-```bash
-python -m ip.deployment.view_demo_pcds --demo demos/task1_demo1.pkl --show-tcp
-```
-Policy-view (what the model actually sees: EE frame + subsampled points):
-```bash
-python -m ip.deployment.view_demo_pcds --demo demos/task1_demo1.pkl --policy-view --use-config
-```
-Auto-fit view + axes (useful if clouds drift out of view):
-```bash
-python -m ip.deployment.view_demo_pcds --demo demos/task1_demo1.pkl --policy-view --use-config --auto-fit --show-axes
-```
-
-### D4. Manual-seed workflow (if SAM is unreliable)
-```bash
-python -m ip.deployment --manual-seed --demo demos/task1_demo1.pkl
-```
-Manual seeding lets you select multiple objects per camera and bypass SAM initialization.
+Open the URL printed in the terminal (Viser may auto-select `8080`, `8081`, ...).
+Playback speed can be adjusted from the **FPS** slider in the viewer GUI.
 
 ---
 
@@ -732,10 +741,20 @@ Manual seeding lets you select multiple objects per camera and bypass SAM initia
 - Check gripper cable connection
 - Try power-cycling the gripper
 
+### Issue: "Robotiq gripper is not available for gripper state feedback"
+- Deployment now fails fast when gripper feedback is missing (no default fallback).
+- Verify Robotiq URCap/socket connection and that gripper is enabled in config.
+- If intentionally running without gripper control, use tools that do not require policy gripper observations.
+
 ### Issue: "No valid point clouds captured"
 - Verify cameras are connected (`rs-enumerate-devices`)
 - Check camera serial numbers in config
 - Ensure depth stream is working (`realsense-viewer`)
+
+### Issue: "Segmentation is enabled but no mask was produced ..."
+- Deployment no longer falls back to unsegmented point clouds when segmentation is enabled.
+- Verify SAM/XMem checkpoints and seeding state.
+- For manual XMem seeding mode, ensure masks are initialized for every camera before running.
 
 ### Issue: "XMem++ requires CUDA"
 - XMem++ only runs on GPU
@@ -777,7 +796,11 @@ Manual seeding lets you select multiple objects per camera and bypass SAM initia
 
 | Item              | Path                                                |
 | ----------------- | --------------------------------------------------- |
-| Deployment config | `ip/deployment.py` or custom script                 |
+| Deployment config | `ip/deployment/cli.py` or custom script             |
+| Deployment docs   | `ip/deployment/docs/*.md`                           |
+| Deployment utils  | `ip/deployment/utils/*.py`                          |
+| Deployment assets | `ip/deployment/assets/*.json`                       |
+| Calibration tools | `ip/deployment/calibration/*.py`                    |
 | SAM checkpoint    | `checkpoints/sam/sam_vit_b_01ec64.pth`              |
 | XMem++ checkpoint | `checkpoints/xmem/XMem.pth`                         |
 | IP model          | `checkpoints/ip/{config.pkl, model.pt}`             |
