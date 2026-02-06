@@ -93,6 +93,21 @@ class URRTDEControl:
             )
             return self._is_command_success(result)
 
+    def execute_joint_positions(self, joints_rad: list[float]) -> bool:
+        if len(joints_rad) != 6:
+            raise ValueError(f"Expected 6 joint values, got {len(joints_rad)}")
+        result = self._rtde.servoJ(
+            [float(x) for x in joints_rad],
+            0.0,
+            0.0,
+            self._cfg.servo_time,
+            self._cfg.servo_lookahead,
+            self._cfg.servo_gain,
+        )
+        if self._cfg.servo_time > 0:
+            time.sleep(self._cfg.servo_time)
+        return self._is_command_success(result)
+
     def execute_gripper(self, command: float) -> None:
         if not self._gripper_cfg.enable:
             return
@@ -104,8 +119,29 @@ class URRTDEControl:
         else:
             self._gripper.close(speed=self._gripper_cfg.speed, force=self._gripper_cfg.force)
 
+    def set_gripper_closed_norm(self, closed_norm: float) -> None:
+        if not self._gripper_cfg.enable:
+            return
+        if self._gripper is None:
+            raise RuntimeError("Gripper command requested but RobotiqGripper is not available.")
+        closed_norm = float(np.clip(closed_norm, 0.0, 1.0))
+        lo = int(self._gripper_cfg.open_position)
+        hi = int(self._gripper_cfg.closed_position)
+        target = int(round(lo + closed_norm * (hi - lo)))
+        self._gripper.move(target, speed=self._gripper_cfg.speed, force=self._gripper_cfg.force)
+
     def enable_freedrive(self) -> None:
         self._rtde.freedriveMode()
 
     def disable_freedrive(self) -> None:
         self._rtde.endFreedriveMode()
+
+    def stop_motion(self) -> None:
+        try:
+            self._rtde.servoStop()
+        except Exception:
+            pass
+        try:
+            self._rtde.speedStop()
+        except Exception:
+            pass

@@ -604,3 +604,61 @@ Tighten SPARK teleop runtime semantics to avoid silent misconfiguration and make
 - Prevent hidden calibration-offset mismatches from bad file paths.
 - Keep freedrive and Spark teleop modes behaviorally separated for operator clarity.
 - Preserve fail-fast deployment principles while staying close to SPARK control flow.
+
+## SPARK Unification Into Demo Collector (2026-02-06)
+
+### Decision
+Treat SPARK strictly as a demo control input backend and remove the parallel SPARK teleop stack.
+
+### Changed
+- Added Spark input driver in control layer:
+  - `ip.deployment.control.spark_input`
+  - includes Spark serial decode/unwrapping, profile mapping (`lightning`/`thunder`), and UR command loop.
+- Added Spark alignment GUI in shared stack:
+  - `ip.deployment.control.spark_alignment_gui`
+  - runs throughout Spark collection and shows Spark-vs-UR XYZ error + bounds.
+  - recording state is GUI-driven: `Start Recording`, `Stop + Save`, `Cancel`.
+  - `Cancel` / window close discards the recording.
+- Extended `URRTDEControl` with shared-control primitives used by Spark input:
+  - `execute_joint_positions(...)` via `servoJ`
+  - `set_gripper_closed_norm(...)`
+  - `stop_motion()`
+- Unified demo collection path:
+  - `DemoCollector.collect_kinesthetic(...)` now supports `control_mode`:
+    - `keyboard`: pendant freedrive + keyboard open/close hotkeys
+    - `spark`: Spark serial teleop commands
+  - both modes use identical camera/perception/state capture and demo output schema.
+- CLI changes in `ip.deployment.cli`:
+  - added `--demo-control {keyboard,spark}`
+  - added Spark args for collect-demo mode:
+    - `--spark-serial`
+    - `--spark-profile {lightning,thunder}`
+    - `--spark-offsets-pickle`
+- Removed redundant package `ip/deployment/spark_teleop/` (camera/runtime/gui/recorder parallel stack).
+- Rewrote `ip/deployment/docs/SPARK_TELEOP_GUIDE.md` to document Spark-as-input workflow on the shared pipeline.
+
+### Why
+- Avoid duplicate camera and runtime implementations.
+- Ensure keyboard and Spark collection produce the same data path and semantics.
+- Keep SPARK scope minimal: substitute for freedrive+keyboard input only.
+
+## SPARK Flow Audit + Start/Stop Consistency (2026-02-06)
+
+### Decision
+Keep Spark as control-input-only in the shared collector path, with GUI alive throughout collection and explicit record start/stop semantics.
+
+### Changed
+- Audited `SPARK-Remote-data_collection` behavior:
+  - teleop GUI runs continuously
+  - recording start/stop is a separate operator trigger
+- Confirmed unified path in deployment:
+  - one collector pipeline for camera/state/demo schema
+  - Spark only substitutes the command source
+- Fixed Spark pre-record wait behavior:
+  - wired keyboard `q/esc` stop event into GUI `wait_for_start(...)` external stop callback.
+  - this ensures clean cancel before start without hanging in pre-record wait.
+
+### Why
+- Matches original Spark operator mental model (monitoring GUI always on, explicit recording control).
+- Preserves identical data semantics between keyboard and Spark collection modes.
+- Removes edge-case mismatch in cancel flow before recording starts.

@@ -2,7 +2,7 @@
 
 This guide walks through deploying Instant Policy on a **brand new system** from scratch. It covers hardware setup, software installation, calibration, and first run.
 
-For ROS-free SPARK teleop/data collection, see:
+For SPARK-as-input demo collection (shared deployment pipeline), see:
 - `ip/deployment/docs/SPARK_TELEOP_GUIDE.md`
 
 ---

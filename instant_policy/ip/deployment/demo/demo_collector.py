@@ -3,12 +3,17 @@ import pickle
 import threading
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import cv2
 import numpy as np
 
 from ip.utils.data_proc import extract_waypoints, sample_to_cond_demo
+from ip.deployment.control.spark_input import SparkDemoInput
+
+
+class DemoCollectionCancelled(RuntimeError):
+    pass
 
 
 class DemoCollector:
@@ -46,54 +51,105 @@ class DemoCollector:
         rate_hz: float = 10.0,
         use_segmentation: bool = False,
         debug_waypoints: bool = False,
+        control_mode: str = "keyboard",
+        spark_input: Optional[SparkDemoInput] = None,
     ) -> Dict:
-        print(f"Collecting demo for: {task_name}")
-        print("Move robot to start position, press ENTER to begin recording...")
-        input()
-
         try:
             from pynput import keyboard
         except Exception as exc:
             raise ImportError("pynput is required for demo hotkeys. Install with `pip install pynput`.") from exc
 
+        print(f"Collecting demo for: {task_name}")
+        mode = str(control_mode).lower()
+        if mode not in {"keyboard", "spark"}:
+            raise ValueError(f"Unsupported control_mode={control_mode!r}. Expected 'keyboard' or 'spark'.")
+        if mode == "spark" and spark_input is None:
+            raise ValueError("spark_input must be provided when control_mode='spark'.")
+
+        if mode == "keyboard":
+            print("Move robot to start position, press ENTER to begin recording...")
+            input()
+
         frames = {"pcds": [], "T_w_es": [], "grips": [], "grip_cmds": [], "grip_raws": []}
         debug_frames_all = [] if debug_waypoints else None
         stop_event = threading.Event()
         grip_cmd = {"value": None}
-        def on_press(key):
-            if stop_event.is_set():
-                return False
-            if key == keyboard.Key.esc:
-                stop_event.set()
-                return False
-            try:
-                char = key.char.lower()
-            except AttributeError:
+        spark_gui = None
+        spark_cancelled = False
+
+        if mode == "keyboard":
+            def on_press(key):
+                if stop_event.is_set():
+                    return False
+                if key == keyboard.Key.esc:
+                    stop_event.set()
+                    return False
+                try:
+                    char = key.char.lower()
+                except AttributeError:
+                    return None
+                if char == "q":
+                    stop_event.set()
+                    return False
+                if char == "o":
+                    if hasattr(self.control, "execute_gripper"):
+                        self.control.execute_gripper(1.0)
+                    grip_cmd["value"] = 1.0
+                elif char == "c":
+                    if hasattr(self.control, "execute_gripper"):
+                        self.control.execute_gripper(0.0)
+                    grip_cmd["value"] = 0.0
                 return None
-            if char == "q":
-                stop_event.set()
-                return False
-            if char == "o":
-                if hasattr(self.control, "execute_gripper"):
-                    self.control.execute_gripper(1.0)
-                grip_cmd["value"] = 1.0
-            elif char == "c":
-                if hasattr(self.control, "execute_gripper"):
-                    self.control.execute_gripper(0.0)
-                grip_cmd["value"] = 0.0
-            return None
+        else:
+            def on_press(key):
+                if stop_event.is_set():
+                    return False
+                if key == keyboard.Key.esc:
+                    stop_event.set()
+                    return False
+                try:
+                    char = key.char.lower()
+                except AttributeError:
+                    return None
+                if char == "q":
+                    stop_event.set()
+                    return False
+                return None
 
         listener = keyboard.Listener(on_press=on_press)
         listener.start()
 
-        print("Recording... hotkeys: o=open, c=close, q/esc=stop")
-        if hasattr(self.control, "enable_freedrive"):
-            self.control.enable_freedrive()
+        if mode == "keyboard":
+            print("Recording... hotkeys: o=open, c=close, q/esc=stop")
+            if hasattr(self.control, "enable_freedrive"):
+                self.control.enable_freedrive()
+        else:
+            from ip.deployment.control.spark_alignment_gui import SparkAlignmentGui
+
+            print("Starting Spark input...")
+            spark_input.start()
+            print("Opening Spark alignment GUI...")
+            spark_gui = SparkAlignmentGui(
+                spark_input=spark_input,
+                state=self.state,
+                profile_name=spark_input.profile.name,
+            )
+            print("Spark GUI ready. Click 'Start Recording' to begin.")
+            proceed = spark_gui.wait_for_start(external_stop=lambda: stop_event.is_set())
+            if not proceed:
+                raise DemoCollectionCancelled("Spark demo cancelled before recording started.")
+            print("Recording... Spark input active (GUI controls stop)")
 
         try:
             period = 1.0 / rate_hz
             while not stop_event.is_set():
                 start = time.time()
+                if mode == "spark" and spark_gui is not None:
+                    spark_gui.pump()
+                    if spark_gui.should_stop():
+                        spark_cancelled = not spark_gui.should_save()
+                        stop_event.set()
+                        break
                 pcd_w = self.perception.capture_pcd_world(
                     use_segmentation=use_segmentation,
                     capture_debug_frames=debug_waypoints,
@@ -126,17 +182,38 @@ class DemoCollector:
                 frames["pcds"].append(pcd_w)
                 frames["T_w_es"].append(T_w_e)
                 frames["grips"].append(None)
-                cmd = grip_cmd["value"]
+                if mode == "spark":
+                    spark_err = spark_input.get_last_error()
+                    if spark_err:
+                        raise RuntimeError(f"Spark input error during collection: {spark_err}")
+                    cmd = spark_input.get_last_open_command()
+                else:
+                    cmd = grip_cmd["value"]
                 frames["grip_cmds"].append(None if cmd is None else float(cmd))
                 frames["grip_raws"].append(grip_raw_f)
+
+                if mode == "spark" and spark_gui is not None:
+                    spark_gui.pump()
+                    if spark_gui.should_stop():
+                        spark_cancelled = not spark_gui.should_save()
+                        stop_event.set()
+                        break
 
                 elapsed = time.time() - start
                 if elapsed < period:
                     time.sleep(period - elapsed)
         finally:
             listener.stop()
-            if hasattr(self.control, "disable_freedrive"):
-                self.control.disable_freedrive()
+            if mode == "keyboard":
+                if hasattr(self.control, "disable_freedrive"):
+                    self.control.disable_freedrive()
+            else:
+                if spark_gui is not None:
+                    spark_gui.close()
+                spark_input.stop()
+
+        if spark_cancelled:
+            raise DemoCollectionCancelled("Spark demo cancelled; recording discarded.")
 
         # Post-process measured gripper openness into binary RLBench-style state.
         grips = self._binarize_grips_from_position(frames["grip_raws"])

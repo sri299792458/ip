@@ -1,72 +1,48 @@
-# SPARK Teleop (Pure Python, No ROS)
+# SPARK Demo Input (Unified Deployment Pipeline)
 
-This guide covers the new ROS-free SPARK teleop runtime inside `ip/deployment/spark_teleop`.
+SPARK is now only a control input mode for demo collection.
 
-## Scope
-- SPARK serial input (`pyserial`)
-- UR5e command/state (`ur_rtde`)
-- Robotiq gripper socket control
-- Optional RealSense recording
-- Tk GUI for Spark-vs-UR bound monitoring
+There is one shared pipeline for:
+- camera capture and segmentation
+- robot state reads
+- demo frame schema and waypoint debug export
 
-## Generate Config
-```bash
-python -m ip.deployment.spark_teleop --write-default-config \
-  --config ip/deployment/spark_teleop/config.json
-```
+The only difference is how motion/gripper commands are generated:
+- `keyboard`: pendant freedrive + `o/c` hotkeys
+- `spark`: Spark serial stream mapped to UR `servoJ` + gripper
 
-Install deployment extras first:
+In Spark mode, the alignment GUI stays open throughout demo collection and shows Spark-vs-UR pose alignment and bounds.
+
+## Install
 ```bash
 pip install -e ".[deployment]"
 ```
 
-Then edit:
-- `arms.<arm>.robot_ip`
-- `spark_devices[*].serial_device`
-- `spark_devices[*].offsets_pickle` (if using existing SPARK offsets)
-- optional `cameras` entries for recording
-
-Offsets behavior:
-- If SPARK offsets pickle is discovered locally, defaults are pre-filled.
-- If `offsets_pickle` is set but the file is missing, teleop fails fast.
-- If `offsets_pickle` is empty, first packet raw angles are used as startup offsets.
-
-## Run Teleop
+## Collect Demo with Spark Input
 ```bash
-python -m ip.deployment.spark_teleop --config ip/deployment/spark_teleop/config.json
+python -m ip.deployment \
+  --collect-demo \
+  --demo-out demos/task1_demo1.pkl \
+  --demo-control spark \
+  --spark-serial /dev/ttyUSB0 \
+  --spark-profile lightning
 ```
 
-Single arm:
-```bash
-python -m ip.deployment.spark_teleop --config ip/deployment/spark_teleop/config.json --arm lightning
-```
+Useful options (same shared collector path):
+- `--camera-serial ...` filter cameras
+- `--manual-seed` for manual XMem seeding
+- `--debug-demo-waypoints` to save waypoint RGB+mask overlays
 
-Headless:
-```bash
-python -m ip.deployment.spark_teleop --config ip/deployment/spark_teleop/config.json --no-gui
-```
-
-## Record Demo
-```bash
-python -m ip.deployment.spark_teleop \
-  --config ip/deployment/spark_teleop/config.json \
-  --record-out demos/spark/demo1.pkl \
-  --lang-instruction "pick the blue block into the black bowl"
-```
-
-Output schema:
-- `meta`
-  - `schema_version = "spark_teleop_v1"`
-  - `recorded_at_utc`, `arms`, `lang_instruction`, `num_frames`
-- `frames[i]`
-  - `timestamp`
-  - `arms.<arm>`:
-    - spark angles/raw/enable
-    - commanded joints + gripper closed value
-    - measured joints/tcp/ft/gripper
-  - optional `cameras`
+## Spark Flags
+- `--spark-serial`: required when `--demo-control spark`
+- `--spark-profile`: `lightning` or `thunder` (offset + gripper mapping defaults)
+- `--spark-offsets-pickle`: optional override for offsets file path
 
 ## Notes
-- This stack is independent of ROS1/ROS2.
-- It is bimanual-capable, with single-arm operation controlled by `--arm`.
-- While Freedrive is active on an arm, Spark servoJ streaming for that arm is paused.
+- Spark mode does not use pendant freedrive.
+- GUI runs throughout collection:
+  - `Start Recording` begins capture.
+  - `Stop + Save` ends and saves.
+  - `Cancel` or window close discards recording.
+- Demo output format is the same as keyboard mode.
+- If a configured offsets pickle path is missing, collection fails fast.

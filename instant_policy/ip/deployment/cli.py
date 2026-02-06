@@ -12,7 +12,8 @@ import rtde_control
 
 from ip.deployment.config import CameraConfig, DeploymentConfig
 from ip.deployment.control.action_executor import SafetyLimits
-from ip.deployment.demo.demo_collector import DemoCollector
+from ip.deployment.control.spark_input import SparkDemoInput
+from ip.deployment.demo.demo_collector import DemoCollector, DemoCollectionCancelled
 from ip.deployment.perception.manual_seed_xmem import manual_seed_xmem
 from ip.deployment.orchestrator import InstantPolicyDeployment
 
@@ -192,6 +193,28 @@ def main():
     parser.add_argument("--collect-demo", action="store_true", help="Collect a kinesthetic demo and exit")
     parser.add_argument("--demo-out", default="demo.pkl", help="Output path for collected demo")
     parser.add_argument(
+        "--demo-control",
+        choices=["keyboard", "spark"],
+        default="keyboard",
+        help="Demo control source: pendant freedrive + keyboard hotkeys, or Spark teleop input.",
+    )
+    parser.add_argument(
+        "--spark-serial",
+        default=None,
+        help="Spark serial device (required when --demo-control spark), e.g. /dev/ttyUSB0",
+    )
+    parser.add_argument(
+        "--spark-profile",
+        choices=["lightning", "thunder"],
+        default="lightning",
+        help="Spark mapping profile (offsets/gripper map).",
+    )
+    parser.add_argument(
+        "--spark-offsets-pickle",
+        default=None,
+        help="Optional path override for Spark offsets pickle.",
+    )
+    parser.add_argument(
         "--debug-demo-waypoints",
         action="store_true",
         help="Save RGB+mask images for selected waypoint frames during demo collection.",
@@ -302,11 +325,28 @@ def main():
                 out_dir=None,
             )
         collector = DemoCollector(deployment.perception, deployment.state, deployment.control)
-        raw_demo = collector.collect_kinesthetic(
-            task_name,
-            use_segmentation=config.segmentation.enable,
-            debug_waypoints=args.debug_demo_waypoints,
-        )
+        spark_input = None
+        if args.demo_control == "spark":
+            if not args.spark_serial:
+                raise ValueError("--spark-serial is required when --demo-control spark")
+            spark_input = SparkDemoInput(
+                state=deployment.state,
+                control=deployment.control,
+                serial_device=args.spark_serial,
+                profile_name=args.spark_profile,
+                offsets_pickle=args.spark_offsets_pickle,
+            )
+        try:
+            raw_demo = collector.collect_kinesthetic(
+                task_name,
+                use_segmentation=config.segmentation.enable,
+                debug_waypoints=args.debug_demo_waypoints,
+                control_mode=args.demo_control,
+                spark_input=spark_input,
+            )
+        except DemoCollectionCancelled as exc:
+            print(f"[collect-demo] {exc}")
+            return
         raw_demo["frame_spec"] = frame_spec
         raw_demo["recorded_at_utc"] = datetime.now(timezone.utc).isoformat()
         if args.debug_demo_waypoints:
