@@ -5,7 +5,6 @@ import numpy as np
 import torch
 
 from ip.generation.config import GenerationConfig
-from ip.generation.pseudo_demo_generator import PseudoDemoGenerator
 from ip.models.scene_encoder import SceneEncoder
 
 
@@ -28,6 +27,7 @@ def build_config(args):
         disturbance_prob=args.disturbance_prob,
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
+        gripper_mesh_path=args.gripper_mesh_path,
         seed=args.seed,
         save_renders=args.save_renders,
         render_dir=args.render_dir,
@@ -83,6 +83,12 @@ def main():
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
+    parser.add_argument(
+        "--gripper_mesh_path",
+        type=str,
+        required=True,
+        help="Robotiq 2F-85 mesh path (OBJ/PLY/STL) in meters; required for paper-fidelity generation.",
+    )
     parser.add_argument("--save_renders", action="store_true")
     parser.add_argument("--render_dir", type=str, default=None)
     parser.add_argument("--render_stride", type=int, default=1)
@@ -103,6 +109,7 @@ def main():
 
     config = build_config(args)
     scene_encoder = load_scene_encoder(args)
+    from ip.generation.pseudo_demo_generator import PseudoDemoGenerator
     generator = PseudoDemoGenerator(config, scene_encoder=scene_encoder)
     generator.generate_dataset(
         num_tasks=args.num_tasks,

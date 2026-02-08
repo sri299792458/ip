@@ -11,7 +11,8 @@ For SPARK-as-input demo collection (shared deployment pipeline), see:
 
 ### Hardware Required
 - **Robot**: UR5e with Robotiq 2F-85 gripper
-- **Cameras**: Intel RealSense D405 or D435 (1-2 cameras)
+- **Cameras**: Intel RealSense L515 or D455 (1-2 cameras)
+  Note: 2 L515 cameras will interfere with each other.
 - **Compute**: Linux workstation with NVIDIA GPU (CUDA required for XMem++)
 - **Network**: Ethernet connection to robot (same subnet)
 
@@ -733,76 +734,6 @@ python -m ip.deployment.utils.view_demo_pcds --demo ip/deployment/live.pkl
 ```
 Open the URL printed in the terminal (Viser may auto-select `8080`, `8081`, ...).
 Playback speed can be adjusted from the **FPS** slider in the viewer GUI.
-
----
-
-## Step 11: Troubleshooting
-
-### Issue: "RTDE connection failed"
-- Verify robot IP is reachable (`ping`)
-- Ensure "External Control" program is running on teach pendant
-- Check firewall settings on workstation
-
-### Issue: "Gripper did not activate"
-- Verify Robotiq URCap is installed and enabled
-- Check gripper cable connection
-- Try power-cycling the gripper
-
-### Issue: "Robotiq gripper is not available for gripper state feedback"
-- Deployment now fails fast when gripper feedback is missing (no default fallback).
-- Verify Robotiq URCap/socket connection and that gripper is enabled in config.
-- If intentionally running without gripper control, use tools that do not require policy gripper observations.
-
-### Issue: "No valid point clouds captured"
-- Verify cameras are connected (`rs-enumerate-devices`)
-- Check camera serial numbers in config
-- Ensure depth stream is working (`realsense-viewer`)
-
-### Issue: "Segmentation is enabled but no mask was produced ..."
-- Deployment no longer falls back to unsegmented point clouds when segmentation is enabled.
-- Verify SAM/XMem checkpoints and seeding state.
-- For manual XMem seeding mode, ensure masks are initialized for every camera before running.
-
-### Issue: "XMem++ requires CUDA"
-- XMem++ only runs on GPU
-- Verify CUDA is installed: `nvidia-smi`
-- Ensure PyTorch sees CUDA: `torch.cuda.is_available()`
-
-### Issue: "Robot moves in wrong direction"
-- **Most common cause**: Incorrect `T_world_camera`
-- Verify camera calibration
-- Visualize point cloud in world frame to debug
-
-### Issue: "Safety limit exceeded"
-- Increase `max_translation` / `max_rotation` if needed (carefully)
-
-### Issue: "No IK solution for target pose near current joints"
-- This indicates the predicted Cartesian target is not kinematically reachable on the current branch.
-- Move robot to a better start posture and re-run.
-- Verify calibration and `--flange-to-policy-origin-m` match the demos exactly.
-
----
-
-## Step 12: Best Practices
-
-### Demo Collection Tips
-- Demonstrate slowly and smoothly
-- Keep gripper motions intentional (pause before open/close)
-- Collect 3-5 demos with slight variations
-- Include both successful and recovery motions
-
-### Execution Tips
-- Keep per-step safety limits conservative (`max_translation=0.01`, `max_rotation=3 deg`)
-- Use `servoL` for policy rollout and `moveJ` only for coarse homing/repositioning
-- Deployment now prechecks each policy target with UR kinematics (`qNear=current_q`) and safety limits before executing bounded servo substeps
-- Keep hand near E-stop during testing
-- Test on simple tasks first (e.g., pick-and-place)
-
-### Safety Checklist
-- [ ] E-stop accessible
-- [ ] Workspace bounds configured
-- [ ] Per-step limits set
-- [ ] Tested in freedrive before autonomous
 
 ---
 

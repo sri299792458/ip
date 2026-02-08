@@ -206,6 +206,20 @@ class GraphDiffusion(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config['lr'],
                                       weight_decay=self.config['weight_decay'])
+        cooldown_steps = int(self.config.get('lr_cooldown_steps', 0))
+        total_steps = int(self.config['num_iters'])
+        if cooldown_steps > 0:
+            steady_steps = max(total_steps - cooldown_steps, 1)
+
+            def lr_lambda(step: int):
+                if step < steady_steps:
+                    return 1.0
+                progress = (step - steady_steps + 1) / max(cooldown_steps, 1)
+                return max(0.0, 1.0 - progress)
+
+            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return [optimizer], [{"scheduler": lr_scheduler, "interval": "step", "frequency": 1}]
+
         if self.use_lr_scheduler:
             lr_scheduler = get_scheduler(
                 name='cosine',

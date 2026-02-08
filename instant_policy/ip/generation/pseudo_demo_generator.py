@@ -1,7 +1,9 @@
 import os
+import tempfile
 from typing import List, Optional
 
 import numpy as np
+import trimesh
 from tqdm import tqdm
 
 from glob import glob
@@ -20,11 +22,13 @@ from ip.generation.renderer import DepthRenderer
 from ip.generation.scene_builder import SceneBuilder, Scene
 from ip.generation.trajectory_interpolator import TrajectoryInterpolator
 from ip.generation.waypoint_sampler import Waypoint, WaypointSampler
-from ip.utils.common_utils import downsample_pcd
 from ip.utils.data_proc import sample_to_cond_demo, sample_to_live, save_sample
 
 
 class PseudoDemoGenerator:
+    OPEN = 1
+    CLOSED = 0
+
     def __init__(self, config: GenerationConfig, scene_encoder=None):
         self.config = config
         self.scene_encoder = scene_encoder
@@ -38,6 +42,11 @@ class PseudoDemoGenerator:
             max_meshes=config.max_meshes,
             cache_meshes=config.cache_meshes,
         )
+        self.gripper_mesh = self._load_gripper_mesh()
+        self.gripper_surface_points = trimesh.sample.sample_surface(
+            self.gripper_mesh,
+            self.scene_builder.surface_sample_count,
+        )[0].astype(np.float32)
         self.waypoint_sampler = WaypointSampler(
             bias_prob=config.bias_prob,
             num_waypoints_range=config.num_waypoints_range,
@@ -56,7 +65,35 @@ class PseudoDemoGenerator:
             cameras=config.cameras,
             downsample_voxel=config.render_downsample_voxel,
             max_points_per_obs=config.max_points_per_obs,
+            gripper_mesh=self.gripper_mesh,
         )
+
+    def _load_gripper_mesh(self) -> trimesh.Trimesh:
+        path = self.config.gripper_mesh_path
+        if path is None:
+            raise RuntimeError(
+                "gripper_mesh_path is required for paper-fidelity pseudo-demo generation. "
+                "Build one with: python -m ip.scripts.build_robotiq_mesh --out <path>.obj"
+            )
+
+        mesh = trimesh.load(path, force="mesh", process=False)
+        if isinstance(mesh, trimesh.Scene):
+            mesh = trimesh.util.concatenate(mesh.dump())
+        if not isinstance(mesh, trimesh.Trimesh):
+            raise RuntimeError(f"Unsupported gripper mesh type: {type(mesh)}")
+        if mesh.vertices.size == 0:
+            raise RuntimeError(f"Empty gripper mesh: {path}")
+        mesh = mesh.copy()
+        mesh.remove_unreferenced_vertices()
+        ext = np.asarray(mesh.extents, dtype=np.float64)
+        max_extent = float(np.max(ext))
+        min_extent = float(np.min(ext))
+        if max_extent > 1.0 or min_extent < 0.005:
+            raise RuntimeError(
+                f"Gripper mesh extents look invalid for meter units: {ext.tolist()} from {path}. "
+                "Expected a metric Robotiq 2F-85 mesh."
+            )
+        return mesh
 
     def _sample_start_pose(self, rng: np.random.Generator):
         bounds = self.config.gripper_bounds
@@ -81,43 +118,21 @@ class PseudoDemoGenerator:
             obj.pose[:3, 3] += pos_noise.astype(np.float32)
         return varied
 
-    def _perturb_waypoints(self, waypoints: List[Waypoint], rng: np.random.Generator):
-        for w in waypoints:
-            w.pose[:3, 3] += rng.normal(scale=0.03, size=3)
-            yaw = rng.normal(scale=np.deg2rad(10.0))
-            pitch = rng.normal(scale=np.deg2rad(10.0))
-            roll = rng.normal(scale=np.deg2rad(10.0))
-            Rn = np.array([
-                [1.0, 0.0, 0.0],
-                [0.0, np.cos(roll), -np.sin(roll)],
-                [0.0, np.sin(roll), np.cos(roll)],
-            ], dtype=np.float32)
-            Rp = np.array([
-                [np.cos(pitch), 0.0, np.sin(pitch)],
-                [0.0, 1.0, 0.0],
-                [-np.sin(pitch), 0.0, np.cos(pitch)],
-            ], dtype=np.float32)
-            Ry = np.array([
-                [np.cos(yaw), -np.sin(yaw), 0.0],
-                [np.sin(yaw), np.cos(yaw), 0.0],
-                [0.0, 0.0, 1.0],
-            ], dtype=np.float32)
-            w.pose[:3, :3] = (Ry @ Rp @ Rn) @ w.pose[:3, :3]
-        return waypoints
-
-    def _closest_object(self, scene: Scene, gripper_pos: np.ndarray):
+    def _closest_object(self, scene: Scene, gripper_pose: np.ndarray):
+        grip_pts = transform_points(self.gripper_surface_points, gripper_pose)
         best_idx = None
         best_dist = None
         for idx, obj in enumerate(scene.objects):
-            pts = transform_points(obj.surface_points, obj.pose)
-            d = np.linalg.norm(pts - gripper_pos[None, :], axis=1)
+            obj_pts = transform_points(obj.surface_points, obj.pose)
+            # Distance between two sampled surfaces (object and gripper mesh).
+            d = np.linalg.norm(obj_pts[:, None, :] - grip_pts[None, :, :], axis=2)
             dist = float(np.min(d))
             if best_dist is None or dist < best_dist:
                 best_dist = dist
                 best_idx = idx
         if best_idx is None:
             return None
-        if best_dist is not None and best_dist > self.config.attach_radius:
+        if self.config.attach_radius is not None and best_dist is not None and best_dist > self.config.attach_radius:
             return None
         return best_idx
 
@@ -134,21 +149,16 @@ class PseudoDemoGenerator:
         for w in traj:
             grip = int(w.gripper_state)
             if last_grip is None:
-                if grip == 1 and self.config.attach_on_grasp:
-                    obj_idx = self._closest_object(scene, w.pose[:3, 3])
-                    if obj_idx is not None:
-                        obj = scene.objects[obj_idx]
-                        attached_idx = obj_idx
-                        attached_offset = np.linalg.inv(w.pose) @ obj.pose
                 last_grip = grip
-            if grip != last_grip:
-                if grip == 1 and self.config.attach_on_grasp:
-                    obj_idx = self._closest_object(scene, w.pose[:3, 3])
+            elif grip != last_grip:
+                # Paper Appendix D: attach/detach when gripper state changes.
+                if grip == self.CLOSED and last_grip == self.OPEN and self.config.attach_on_grasp:
+                    obj_idx = self._closest_object(scene, w.pose)
                     if obj_idx is not None:
                         obj = scene.objects[obj_idx]
                         attached_idx = obj_idx
                         attached_offset = np.linalg.inv(w.pose) @ obj.pose
-                else:
+                elif grip == self.OPEN and last_grip == self.CLOSED:
                     attached_idx = None
                     attached_offset = None
                 last_grip = grip
@@ -158,7 +168,10 @@ class PseudoDemoGenerator:
             pcd = self.renderer.render_observation(scene)
             color, depth = None, None
             if pcd.size == 0:
-                pcd = self._fallback_pcd(scene)
+                raise RuntimeError(
+                    "Rendered empty point cloud. Check camera setup/workspace bounds; "
+                    "paper setup expects segmented observations from 3 depth cameras."
+                )
             pcds.append(pcd)
             if render_dir is not None and len(pcds) % render_stride == 0:
                 color, depth = self.renderer.render_visual(scene, w.pose, visual_idx)
@@ -208,25 +221,12 @@ class PseudoDemoGenerator:
             writer.append_data(imageio.imread(frame))
         writer.close()
 
-    def _fallback_pcd(self, scene: Scene):
-        points = []
-        for obj in scene.objects:
-            pts = transform_points(obj.surface_points, obj.pose)
-            points.append(pts)
-        if not points:
-            return np.zeros((1, 3), dtype=np.float32)
-        points = np.concatenate(points, axis=0)
-        if self.config.render_downsample_voxel is not None:
-            points = downsample_pcd(points, voxel_size=self.config.render_downsample_voxel)
-        return points.astype(np.float32)
-
     def generate_demo(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator, render_dir: Optional[str] = None):
         scene = self._vary_scene(base_scene, rng)
         if render_dir is not None:
             scene._render_dir = render_dir
         start_pose = self._sample_start_pose(rng)
         waypoints = self.waypoint_sampler.resolve_waypoints(scene, waypoint_specs)
-        waypoints = self._perturb_waypoints(waypoints, rng)
         start_grip = waypoints[0].gripper_state if waypoints else int(rng.integers(0, 2))
         waypoints = [Waypoint(pose=start_pose, gripper_state=start_grip)] + waypoints
         method = rng.choice(self.config.interpolation_methods)
@@ -415,7 +415,14 @@ class PseudoDemoGenerator:
     def _save_task(self, task_data: dict, save_dir: str, index: int):
         os.makedirs(save_dir, exist_ok=True)
         path = os.path.join(save_dir, f"task_{index}.pt")
-        torch.save(task_data, path)
+        fd, tmp_path = tempfile.mkstemp(prefix=".tmp_task_", suffix=".pt", dir=save_dir)
+        os.close(fd)
+        try:
+            torch.save(task_data, tmp_path)
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     def _generate_dataset_trajectory(
         self,

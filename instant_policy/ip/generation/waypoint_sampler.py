@@ -21,6 +21,9 @@ class Waypoint:
 
 
 class WaypointSampler:
+    OPEN = 1
+    CLOSED = 0
+
     def __init__(
         self,
         bias_prob: float,
@@ -85,9 +88,9 @@ class WaypointSampler:
         lift_pose = grasp_pose.copy()
         lift_pose[:3, 3] += np.array([0.0, 0.0, rng.uniform(0.05, 0.15)], dtype=np.float32)
         waypoints = [
-            self._to_local_spec(obj_index, pre_pose, scene, 0),
-            self._to_local_spec(obj_index, grasp_pose, scene, 1),
-            self._to_local_spec(obj_index, lift_pose, scene, 1),
+            self._to_local_spec(obj_index, pre_pose, scene, self.OPEN),
+            self._to_local_spec(obj_index, grasp_pose, scene, self.CLOSED),
+            self._to_local_spec(obj_index, lift_pose, scene, self.CLOSED),
         ]
         return waypoints
 
@@ -104,18 +107,18 @@ class WaypointSampler:
             place_obj_index = (obj_index + 1) % len(scene.objects)
             place_obj = scene.objects[place_obj_index]
             place_pose = self._sample_object_pose(place_obj, rng)
-            place_spec = self._to_local_spec(place_obj_index, place_pose, scene, 1)
+            place_spec = self._to_local_spec(place_obj_index, place_pose, scene, self.CLOSED)
         else:
             place_pose = self._sample_random_pose(scene.workspace_bounds, rng)
             place_pose[:3, 3][2] = max(place_pose[:3, 3][2], scene.table_height + 0.08)
-            place_spec = self._to_local_spec(None, place_pose, scene, 1)
+            place_spec = self._to_local_spec(None, place_pose, scene, self.CLOSED)
         release_pose = place_spec.pose.copy()
         waypoints = [
-            self._to_local_spec(obj_index, pre_pose, scene, 0),
-            self._to_local_spec(obj_index, grasp_pose, scene, 1),
-            self._to_local_spec(obj_index, lift_pose, scene, 1),
+            self._to_local_spec(obj_index, pre_pose, scene, self.OPEN),
+            self._to_local_spec(obj_index, grasp_pose, scene, self.CLOSED),
+            self._to_local_spec(obj_index, lift_pose, scene, self.CLOSED),
             place_spec,
-            WaypointSpec(pose=release_pose, gripper_state=0, obj_index=place_spec.obj_index),
+            WaypointSpec(pose=release_pose, gripper_state=self.OPEN, obj_index=place_spec.obj_index),
         ]
         return waypoints
 
@@ -130,9 +133,9 @@ class WaypointSampler:
         pull_pose = grasp_pose.copy()
         pull_pose[:3, 3] += pull_dir * rng.uniform(0.05, 0.2)
         waypoints = [
-            self._to_local_spec(obj_index, pre_pose, scene, 0),
-            self._to_local_spec(obj_index, grasp_pose, scene, 1),
-            self._to_local_spec(obj_index, pull_pose, scene, 1),
+            self._to_local_spec(obj_index, pre_pose, scene, self.OPEN),
+            self._to_local_spec(obj_index, grasp_pose, scene, self.CLOSED),
+            self._to_local_spec(obj_index, pull_pose, scene, self.CLOSED),
         ]
         return waypoints
 
@@ -147,9 +150,9 @@ class WaypointSampler:
         push_pose = grasp_pose.copy()
         push_pose[:3, 3] += push_dir * rng.uniform(0.05, 0.2)
         waypoints = [
-            self._to_local_spec(obj_index, pre_pose, scene, 0),
-            self._to_local_spec(obj_index, grasp_pose, scene, 1),
-            self._to_local_spec(obj_index, push_pose, scene, 1),
+            self._to_local_spec(obj_index, pre_pose, scene, self.OPEN),
+            self._to_local_spec(obj_index, grasp_pose, scene, self.CLOSED),
+            self._to_local_spec(obj_index, push_pose, scene, self.CLOSED),
         ]
         return waypoints
 

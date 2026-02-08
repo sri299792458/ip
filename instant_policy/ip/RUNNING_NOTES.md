@@ -1,6 +1,6 @@
 # Deployment Running Notes
 
-Last updated: 2026-02-06
+Last updated: 2026-02-08
 
 ## Log Discipline
 
@@ -10,6 +10,210 @@ Keep this file as the canonical deployment decision log.
 ### Rule
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
+
+## Generation Docs Consolidation (2026-02-08)
+
+### Decision
+Keep one canonical markdown doc in `ip/generation` instead of split README + alignment note.
+
+### Changed
+- Rewrote `ip/generation/README.md` as the single clean generation reference.
+- Removed `ip/generation/PAPER_ALIGNMENT.md`.
+- Updated `ip/paper.md` mapping to point to `ip/generation/README.md`.
+
+### Why
+- Avoid duplicated/stale documentation and keep paper-alignment + operational usage in one place.
+
+### User-visible Effect
+- `ip/generation` now has one markdown entrypoint for all pseudo-demo generation details.
+
+## Local Paper Corpus (2026-02-08)
+
+### Decision
+Keep a local full-text copy of the Instant Policy paper in repo for fast offline search.
+
+### Changed
+- Added:
+  - `instant_policy/docs/papers/instant_policy/2411.12633v2.pdf`
+  - `instant_policy/docs/papers/instant_policy/2411.12633v2.layout.txt`
+  - `instant_policy/docs/papers/instant_policy/2411.12633v2.txt`
+  - `instant_policy/docs/papers/instant_policy/SHA256SUMS`
+  - `instant_policy/docs/papers/instant_policy/README.md`
+
+### Why
+- Avoid repeated online lookup when validating paper claims.
+- `layout` and plain text variants improve search reliability across line-wrap styles.
+
+### User-visible Effect
+- Paper details can now be searched locally with `rg` at any time.
+
+## Local Paper Quickref (2026-02-08)
+
+### Decision
+Keep a local paper quick-reference file in repo to avoid repeated online lookup for the same constants.
+
+### Changed
+- Added/filled `ip/paper.md` with:
+  - canonical links (`arXiv`, `ar5iv`),
+  - paper-canonical constants used in this codebase,
+  - direct claim-to-code file mapping.
+
+### Why
+- Reduces repeated context switching and accidental drift when implementing or reviewing paper-aligned behavior.
+
+### User-visible Effect
+- Fast local reference for paper constants without needing a downloaded PDF.
+
+## Training Default Alignment (2026-02-08)
+
+### Decision
+Make default training schedule paper-exact instead of open-ended.
+
+### Changed
+- `ip/configs/base_config.py`
+  - `num_iters` set to `2,550,000` (2.5M train + 50K cooldown).
+  - added `lr_cooldown_steps=50000`.
+- `ip/models/diffusion.py`
+  - added step LR schedule: constant LR until `num_iters - lr_cooldown_steps`,
+    then linear decay to zero over the final `lr_cooldown_steps`.
+  - this cooldown path now takes precedence over the optional cosine scheduler.
+
+### Why
+- Paper Appendix states training runs for 2.5M optimisation steps followed by a 50K LR cooldown period.
+
+### User-visible Effect
+- Default training now stops at paper-scale steps and applies a real cooldown by default.
+
+## Ring-Buffer Training Pipeline (2026-02-08)
+
+### Decision
+Use trajectory-format ring buffer (`task_*.pt`) plus a fixed validation set, with SLURM scripts for generation and training.
+
+### Changed
+- Added `apptainer/generate_pseudo_buffer.slurm` for sharded pseudo-task ring generation.
+- Added `apptainer/generate_pseudo_val.slurm` for fixed validation pseudo-task generation.
+- Added `apptainer/train_instant_policy.slurm` for policy training with `--data_format trajectory`.
+- Updated `apptainer/README_instant_policy.md` with end-to-end ring-buffer workflow and commands.
+
+### Why
+- Paper-style continuous pseudo-data generation is practical only with replacement.
+- Trajectory storage avoids `data_*.pt` file explosion and keeps training I/O manageable.
+- Fixed validation split gives stable model-selection signal while train buffer keeps refreshing.
+
+### User-visible Effect
+- You can now launch generation + training directly with:
+  - `sbatch apptainer/generate_pseudo_buffer.slurm`
+  - `sbatch apptainer/generate_pseudo_val.slurm`
+  - `sbatch apptainer/train_instant_policy.slurm`
+
+## Atomic Writes for Ring-Buffer Safety (2026-02-08)
+
+### Decision
+Write pseudo-data files atomically to avoid partial reads during concurrent generation/training.
+
+### Changed
+- `ip/utils/data_proc.py`: `save_sample` now writes `data_*.pt` via temp file + `os.replace`.
+- `ip/generation/pseudo_demo_generator.py`: `task_*.pt` writes use temp file + `os.replace`.
+
+### Why
+- With continuous overwrite, readers can hit files while writers are updating.
+- Atomic replace makes each file transition all-or-nothing.
+
+### User-visible Effect
+- Fewer silent data-loading failures when training runs alongside ring-buffer writers.
+
+## Pseudo-Demo Gripper Mesh Source (2026-02-07)
+
+### Decision
+Use URDF-assembled Robotiq 2F-85 geometry for pseudo-demo generation.
+
+### Changed
+- Added `ip/scripts/build_robotiq_mesh.py`.
+- Script supports:
+  - auto-download of maintained `robotiq_description` files from `PickNikRobotics/ros2_robotiq_gripper`,
+  - or using a local `robotiq_description` directory,
+  - kinematic assembly from URDF joints/mimic chain at a selected jaw state,
+  - output as a single `.obj/.ply/.stl` file.
+
+### Why
+- `--gripper_mesh_path` expects one mesh path while source geometry is multipart links.
+- URDF assembly is the standard robotics way to compose link meshes and joint transforms.
+
+### User-visible Effect
+- One command now creates a URDF-faithful gripper mesh for:
+  - `python -m ip.scripts.generate_pseudo_demos --gripper_mesh_path ...`
+
+## Pseudo-Demo Paper-Fidelity Audit (2026-02-07)
+
+### Decision
+Align pseudo-demo generation strictly with Appendix D implementation details where claims are explicit.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`
+  - Removed proxy-gripper fallback; `gripper_mesh_path` is now required at runtime.
+  - Attachment now triggers only on open->closed state transitions (detach on closed->open), matching the paper wording.
+  - Removed synthetic point-cloud fallback on empty renders; generation now fails fast.
+- `ip/scripts/generate_pseudo_demos.py`
+  - `--gripper_mesh_path` is now required.
+- `ip/generation/README.md`
+  - Updated to state mesh path is required for paper-fidelity runs.
+
+### Why
+- Paper states pseudo-data is generated with an initialised Robotiq 2F-85 mesh and closest-object attach/detach on gripper state changes.
+- Synthetic fallback point clouds are not consistent with "recorded using PyRender and simulated depth cameras."
+
+### User-visible Effect
+- Pseudo-demo generation now errors early if:
+  - no Robotiq mesh path is provided, or
+  - rendered observations are empty.
+
+## Pseudo-Gen Dependency Fix (2026-02-07)
+
+### Decision
+Pin `pyrender` runtime dependencies in the environment spec.
+
+### Changed
+- Added to `environment.yml` pip section:
+  - `pyrender==0.1.45`
+  - `pyopengl==3.1.0`
+  - `pyglet==1.5.27`
+
+### Why
+- `ip/generation/renderer.py` depends on `pyrender`, but these were not declared in the environment file.
+
+### User-visible Effect
+- Fresh `ip_env` setup now includes pseudo-demo rendering dependencies by default.
+- Smoke test with `PYOPENGL_PLATFORM=egl` generated pseudo samples successfully.
+
+## Pseudo-Gen README Sync (2026-02-07)
+
+### Decision
+Keep pseudo-demo README command snippets aligned with strict CLI requirements.
+
+### Changed
+- Updated `ip/generation/README.md` examples to include required `--gripper_mesh_path` in:
+  - save-renders example,
+  - steps ring-buffer example,
+  - trajectory ring-buffer example.
+- Updated troubleshooting note to reflect fail-fast behavior on empty rendered point clouds.
+
+### Why
+- CLI now requires a Robotiq mesh path and no longer falls back on synthetic point clouds.
+
+### User-visible Effect
+- README commands are copy-paste valid for current code.
+
+## Robotiq Mesh State Convention (2026-02-07)
+
+### Decision
+Use a fixed 2F-85 mesh state (`open` by default) for proximity checks in pseudo-demo generation.
+
+### Why
+- Appendix D requires a Robotiq 2F-85 mesh and closest-object attach/detach on gripper state changes.
+- It does not require articulated finger simulation during pseudo-demo synthesis.
+
+### User-visible Effect
+- `build_robotiq_mesh --state open` is the standard recommended artifact for `--gripper_mesh_path`.
 
 ## Gripper State Convention
 
@@ -701,3 +905,144 @@ Keep the same first-principles behavior, but reduce implementation complexity.
 ### Why
 - Easier to reason about and maintain.
 - Preserves the intended behavior (event preservation + geometric coverage + pause suppression) without extra machinery.
+
+## Running Notes Relocation + Language Doc Refresh (2026-02-07)
+
+### Decision
+Move running notes to top-level `ip/` and keep the language modality transfer document concise and code-aligned.
+
+### Changed
+- Moved notes file:
+  - `ip/deployment/docs/RUNNING_NOTES.md` -> `ip/RUNNING_NOTES.md`
+- Rewrote `ip/README_LANGUAGE_MODALITY_TRANSFER.md` to match current implementation and remove outdated narrative bulk.
+
+### Why
+- Notes are cross-cutting (deployment, training, data), so top-level placement is easier for ongoing updates.
+- The previous language document was hard to scan and had stale sections that were no longer useful for implementation decisions.
+
+## Language CLI Help Alignment (2026-02-07)
+
+### Decision
+Align `train_language.py` and `eval_language.py` CLI help text with the streamlined language-modality-transfer guide.
+
+### Changed
+- Updated `argparse` descriptions/help for:
+  - `ip/train_language.py`
+  - `ip/eval_language.py`
+- Clarified:
+  - checkpoint directory expectations (`model.pt` + `config.pkl`)
+  - dataset expectation (`data_*.pt` with `lang_emb`)
+  - language input modes at eval (`--lang_emb_path`, `--lang_text`, `--paraphrase_file`)
+- Set `eval_language.py` default `--model_path` to `./checkpoints/ip` to match current guide and repository layout.
+- Moved RLBench-dependent imports in `eval_language.py` to lazy import sites so `python -m ip.eval_language --help` works even when RLBench is not installed.
+
+### Why
+- Reduces command ambiguity and mismatch between docs and executable CLI behavior.
+- Makes common usage discoverable directly from `--help`.
+
+## Apptainer Popup Fix + Non-VNC Runner (2026-02-07)
+
+### Decision
+Fix CoppeliaSim update-popup suppression using the actual settings keys read by CoppeliaSim, and add a no-VNC runner for training jobs.
+
+### Changed
+- Updated `apptainer/run_instant_policy_vnc.sh`:
+  - writes `doNotShowUpdateCheckMessage=1`, `suppressStartupDialogs=1`, `noVersionCheck=1` into `usrset.txt`,
+  - removes legacy `checkForUpdates*` keys from `usrset.txt`,
+  - unsets `XDG_CONFIG_HOME` to make settings path deterministic (`$HOME/.CoppeliaSim/usrset.txt`),
+  - supports `RLBENCH_ENABLE_VNC=0` (Xvfb-only mode).
+- Added `apptainer/run_instant_policy.sh` wrapper that sets `RLBENCH_ENABLE_VNC=0` and reuses the same runtime setup.
+- Updated `apptainer/train_language.slurm` default runner to `run_instant_policy.sh`.
+- Updated `apptainer/README_instant_policy.md` to document the no-VNC mode and corrected popup-suppression behavior.
+
+### Why
+- The previous keys were not consumed by CoppeliaSim, so the popup could still block evaluations.
+- Training does not need interactive VNC by default; Xvfb-only is cleaner and lighter while preserving compatibility.
+
+## Apptainer Runner Defaults Cleanup (2026-02-07)
+
+### Decision
+Use no-VNC runner by default for non-interactive batch workflows; keep VNC runner only for workflows that actually require interactive display streaming.
+
+### Changed
+- Updated default runner in:
+  - `apptainer/generate_rlbench_data.slurm`
+  - `apptainer/convert_peract.slurm`
+  - both now default to `run_instant_policy.sh` (Xvfb-only).
+- Removed stale backup file:
+  - `apptainer/run_instant_policy_vnc.sh.backup`
+
+### Why
+- `generate_rlbench_data` already runs in `--headless` mode.
+- `convert_peract` is offline dataset conversion.
+- Keeping VNC off by default reduces process overhead and avoids unnecessary ports/processes.
+
+## Pseudo-Demo First-Principles Alignment (2026-02-07)
+
+### Decision
+Align pseudo-demonstration generation with the paper and with the repo-wide RLBench gripper convention.
+
+### Changed
+- `ip/generation/waypoint_sampler.py` now uses explicit convention constants:
+  - `OPEN = 1`, `CLOSED = 0`
+  - biased skill waypoint templates updated accordingly.
+- `ip/generation/pseudo_demo_generator.py` attachment logic now follows:
+  - attach on open->closed transition using closest-object selection,
+  - detach on closed->open transition.
+- `ip/generation/augmentation.py` gripper corruption now matches Appendix D:
+  - `gripper_noise_prob=0.1` is applied per timestep (not per trajectory).
+- `ip/generation/config.py` default clarified:
+  - `gripper_noise_prob` comment updated to per-timestep probability,
+  - `randomize_num_demos` default set to `False` (fixed context count unless explicitly enabled).
+- `ip/generation/__init__.py` switched to lazy export of `PseudoDemoGenerator` so utility imports do not require `pyrender`.
+- `ip/generation/README.md` updated:
+  - fixed gripper convention statement,
+  - corrected augmentation semantics,
+  - removed stale `render_to_video.py` reference,
+  - updated examples for current scripts and MSI-style ShapeNet path.
+
+### Why
+- Training/eval/deployment in this repo use RLBench gripper semantics (`1=open`, `0=closed`).
+- Previous pseudo-demo defaults mixed opposite semantics and trajectory-level grip noise, which drifted from the paper and introduced avoidable train/eval mismatch.
+
+## Pseudo-Demo Debug Script Consolidation (2026-02-07)
+
+### Decision
+Remove ad-hoc pseudo-demo helper scripts and keep one minimal debug utility.
+
+### Changed
+- Deleted:
+  - `ip/scripts/plot_pseudo_sample.py`
+  - `ip/scripts/animate_pseudo_demo.py`
+  - `ip/scripts/merge_pseudo_demos.py`
+- Added:
+  - `ip/scripts/debug_pseudo_demo.py`
+  - single-frame PNG debug from `data_*.pt`
+  - multi-frame GIF debug from `data_*.pt`
+- Updated `ip/generation/README.md` examples to use only `debug_pseudo_demo.py`.
+
+### Why
+- Keep one clear, maintained path for pseudo-demo visual sanity checks.
+- Remove overlapping scripts with partially duplicated logic and stale options.
+
+## Pseudo-Demo Paper Fidelity Pass (2026-02-07)
+
+### Decision
+Bring pseudo-demo generation closer to Appendix D wording by explicitly modeling a Robotiq 2F-85 mesh and preserving pseudo-task consistency across demos.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`:
+  - initializes a gripper mesh for pseudo-demo synthesis:
+    - uses `--gripper_mesh_path` when provided, otherwise a metric 2F-85 proxy mesh,
+  - uses gripper-mesh surface distance (not only gripper-origin distance) to find closest object on close transitions,
+  - keeps optional `attach_radius` threshold, with default `None` (closest-on-close behavior),
+  - removed per-demo waypoint perturbation to keep sampled waypoint specs semantically consistent across demos of one pseudo-task.
+- `ip/generation/renderer.py` now accepts external gripper mesh for visual rendering.
+- `ip/scripts/generate_pseudo_demos.py` adds `--gripper_mesh_path`.
+- `ip/generation/config.py`:
+  - adds `gripper_mesh_path`,
+  - sets `attach_radius=None` default.
+
+### Why
+- Appendix D explicitly states pseudo-demo generation initializes a Robotiq 2F-85 gripper mesh and attaches/detaches closest objects on gripper-state changes.
+- Waypoint perturbation per demo weakened pseudo-task consistency; object pose randomization and start-pose randomization are sufficient and closer to the paper description.

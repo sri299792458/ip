@@ -26,7 +26,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTANT_POLICY_DIR=${INSTANT_POLICY_DIR:-$REPO_ROOT/instant_policy}
 PROJECT_DIR=${PROJECT_DIR:-$REPO_ROOT}
 DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
-RUNNER=${RUNNER:-$SCRIPT_DIR/run_instant_policy_vnc.sh}
+RUNNER=${RUNNER:-$SCRIPT_DIR/run_instant_policy.sh}
 
 NUM_DEMOS=${NUM_DEMOS:-2}
 NUM_WAYPOINTS=${NUM_WAYPOINTS:-10}
@@ -59,7 +59,7 @@ TASKS=(
 )
 
 if [ ! -x "$RUNNER" ]; then
-  echo "ERROR: run_instant_policy_vnc.sh not found at $RUNNER"
+  echo "ERROR: runner not found or not executable: $RUNNER"
   exit 1
 fi
 

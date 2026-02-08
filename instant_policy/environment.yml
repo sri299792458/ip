@@ -208,6 +208,9 @@ dependencies:
       - pygments==2.18.0
       - pyquaternion==0.9.9
       - python-dateutil==2.9.0.post0
+      - pyrender==0.1.45
+      - pyopengl==3.1.0
+      - pyglet==1.5.27
       - pytz==2024.2
       - referencing==0.35.1
       - regex==2024.11.6

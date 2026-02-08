@@ -14,6 +14,7 @@ class DepthRenderer:
         cameras: List[CameraConfig],
         downsample_voxel: Optional[float] = None,
         max_points_per_obs: Optional[int] = None,
+        gripper_mesh: Optional[trimesh.Trimesh] = None,
     ):
         if not cameras:
             raise ValueError("At least one camera config is required.")
@@ -22,8 +23,9 @@ class DepthRenderer:
         self.max_points_per_obs = max_points_per_obs
         self.renderer = pyrender.OffscreenRenderer(cameras[0].width, cameras[0].height)
         self.mesh_cache: Dict[int, pyrender.Mesh] = {}
-        grip_mesh = trimesh.creation.icosphere(radius=0.015)
-        self.gripper_mesh = pyrender.Mesh.from_trimesh(grip_mesh, smooth=False)
+        if gripper_mesh is None:
+            gripper_mesh = trimesh.creation.icosphere(radius=0.015)
+        self.gripper_mesh = pyrender.Mesh.from_trimesh(gripper_mesh, smooth=False)
 
     def _mesh_key(self, mesh):
         return id(mesh)

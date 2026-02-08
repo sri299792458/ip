@@ -48,8 +48,8 @@ class TrajectoryAugmenter:
     def _add_gripper_noise(self, traj: List[Waypoint], rng: np.random.Generator):
         if len(traj) == 0:
             return traj
-        num_flips = int(rng.integers(1, min(4, len(traj) + 1)))
-        indices = rng.choice(len(traj), size=num_flips, replace=False)
+        # Paper Appendix D: flip the open/close label for ~10% of datapoints.
+        indices = np.where(rng.uniform(0.0, 1.0, size=len(traj)) < self.gripper_noise_prob)[0]
         for idx in indices:
             traj[idx].gripper_state = 1 - traj[idx].gripper_state
         return traj
@@ -66,7 +66,6 @@ class TrajectoryAugmenter:
         aug = self._copy_traj(traj)
         if rng.uniform(0.0, 1.0) < self.disturbance_prob:
             aug = self._inject_disturbance(aug, rng)
-        if rng.uniform(0.0, 1.0) < self.gripper_noise_prob:
-            aug = self._add_gripper_noise(aug, rng)
+        aug = self._add_gripper_noise(aug, rng)
         aug = self._perturb_poses(aug, rng)
         return aug

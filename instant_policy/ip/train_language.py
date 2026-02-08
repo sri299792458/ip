@@ -28,20 +28,42 @@ def freeze_module(module):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=True, help='Path to pretrained checkpoint directory')
-    parser.add_argument('--data_path_train', type=str, required=True, help='Path to language-annotated train data')
-    parser.add_argument('--data_path_val', type=str, default=None, help='Optional validation data path')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
-    parser.add_argument('--max_steps', type=int, default=100000, help='Max training steps')
-    parser.add_argument('--log_every', type=int, default=200, help='Log frequency')
-    parser.add_argument('--save_every', type=int, default=5000, help='Checkpoint frequency')
-    parser.add_argument('--save_dir', type=str, default='./runs_lang', help='Save directory')
-    parser.add_argument('--device', type=str, default='cuda', help='Device to run on')
-    parser.add_argument('--use_wandb', type=int, default=0, help='Enable Weights & Biases logging [0,1]')
-    parser.add_argument('--wandb_project', type=str, default='Instant Policy', help='W&B project name')
-    parser.add_argument('--wandb_entity', type=str, default=None, help='W&B entity (optional)')
-    parser.add_argument('--wandb_run_name', type=str, default='lang_train', help='W&B run name')
+    parser = argparse.ArgumentParser(
+        description=(
+            "Train language bottleneck encoder for Instant Policy.\n"
+            "Expected training data format: step files (data_*.pt) with lang_emb added "
+            "via `python -m ip.scripts.build_language_dataset`."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        '--model_path',
+        type=str,
+        required=True,
+        help='Directory containing teacher checkpoint files: model.pt and config.pkl (typically ./checkpoints/ip).',
+    )
+    parser.add_argument(
+        '--data_path_train',
+        type=str,
+        required=True,
+        help='Training directory with language-annotated step samples (data_*.pt with lang_emb).',
+    )
+    parser.add_argument(
+        '--data_path_val',
+        type=str,
+        default=None,
+        help='Optional validation directory with the same format as --data_path_train.',
+    )
+    parser.add_argument('--batch_size', type=int, default=16, help='Training batch size.')
+    parser.add_argument('--max_steps', type=int, default=100000, help='Maximum optimization steps.')
+    parser.add_argument('--log_every', type=int, default=200, help='Log metrics every N steps.')
+    parser.add_argument('--save_every', type=int, default=5000, help='Save language encoder checkpoint every N steps.')
+    parser.add_argument('--save_dir', type=str, default='./runs_lang', help='Directory to save language encoder checkpoints.')
+    parser.add_argument('--device', type=str, default='cuda', help='Torch device for training.')
+    parser.add_argument('--use_wandb', type=int, default=0, help='Enable Weights & Biases logging [0,1].')
+    parser.add_argument('--wandb_project', type=str, default='Instant Policy', help='W&B project name.')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='W&B entity (optional).')
+    parser.add_argument('--wandb_run_name', type=str, default='lang_train', help='W&B run name.')
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)

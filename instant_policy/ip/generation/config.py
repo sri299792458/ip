@@ -37,7 +37,7 @@ class GenerationConfig:
     num_tasks: int = 100000
     num_demos_per_task: Tuple[int, int] = (3, 5)
     num_context_demos: int = 2
-    randomize_num_demos: bool = True
+    randomize_num_demos: bool = False
     num_context_range: Tuple[int, int] = (1, 5)
     num_waypoints_range: Tuple[int, int] = (2, 6)
     bias_prob: float = 0.5
@@ -63,14 +63,15 @@ class GenerationConfig:
     interpolation_methods: Tuple[str, ...] = ("linear", "cubic", "spherical")
 
     disturbance_prob: float = 0.3
-    gripper_noise_prob: float = 0.1
+    gripper_noise_prob: float = 0.1  # Per-timestep flip probability.
     pose_noise_std: float = 0.002
     rot_noise_deg: float = 1.0
     object_pose_noise_std: float = 0.05
     object_yaw_noise_deg: float = 45.0
 
     attach_on_grasp: bool = True
-    attach_radius: float = 0.06
+    attach_radius: Optional[float] = None
+    gripper_mesh_path: Optional[str] = None  # Required by generator for paper-fidelity runs.
 
     cameras: List[CameraConfig] = field(default_factory=default_cameras)
     render_downsample_voxel: float = 0.01

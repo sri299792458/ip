@@ -4,19 +4,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import trange
-from rlbench.action_modes.action_mode import MoveArmThenGripper
-from rlbench.action_modes.arm_action_modes import EndEffectorPoseViaIK
-from rlbench.action_modes.gripper_action_modes import Discrete
-from rlbench.environment import Environment
-from rlbench.observation_config import ObservationConfig
 
 from ip.models.diffusion import GraphDiffusion
 from ip.models.language_encoder import LanguageConditionedEncoder
 from ip.utils.common_utils import pose_to_transform, transform_to_pose
 from ip.utils.common_utils import actions_to_transforms, transforms_to_actions, get_rigid_transforms
 from ip.utils.data_proc import save_sample, subsample_pcd, transform_pcd
-from ip.utils.rl_bench_utils import get_point_cloud
-from ip.utils.rl_bench_tasks import TASK_NAMES
 from ip.utils.language_utils import get_language_description, encode_texts
 
 
@@ -122,6 +115,13 @@ def _configure_env(env, task, restrict_rot):
 
 
 def _init_env(task_name, headless, restrict_rot):
+    from rlbench.action_modes.action_mode import MoveArmThenGripper
+    from rlbench.action_modes.arm_action_modes import EndEffectorPoseViaIK
+    from rlbench.action_modes.gripper_action_modes import Discrete
+    from rlbench.environment import Environment
+    from rlbench.observation_config import ObservationConfig
+    from ip.utils.rl_bench_tasks import TASK_NAMES
+
     obs_config = ObservationConfig()
     obs_config.set_all(True)
     action_mode = MoveArmThenGripper(
@@ -148,6 +148,8 @@ def _init_env(task_name, headless, restrict_rot):
 def rollout_model_language(model, lang_encoder, lang_emb, task_name='phone_on_base', max_execution_steps=30,
                            execution_horizon=8, num_rollouts=2, headless=False, num_traj_wp=10, restrict_rot=True,
                            env=None, task=None, shutdown_env=True):
+    from ip.utils.rl_bench_utils import get_point_cloud
+
     created_env = False
     if env is None or task is None:
         env, task = _init_env(task_name, headless, restrict_rot)
@@ -249,19 +251,46 @@ def _load_paraphrases(path):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--task_name', type=str, default='plate_out')
-    parser.add_argument('--num_rollouts', type=int, default=5)
-    parser.add_argument('--restrict_rot', type=int, default=1)
-    parser.add_argument('--compile_models', type=int, default=0)
-    parser.add_argument('--model_path', type=str, default='./checkpoints')
-    parser.add_argument('--lang_encoder_path', type=str, required=True)
-    parser.add_argument('--lang_text', type=str, default=None)
-    parser.add_argument('--lang_emb_path', type=str, default=None)
-    parser.add_argument('--paraphrase_file', type=str, default=None)
-    parser.add_argument('--lang_model_name', type=str, default='all-mpnet-base-v2')
-    parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--seed', type=int, default=None)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Evaluate language-conditioned Instant Policy in RLBench.\n"
+            "You must provide a trained language encoder checkpoint. "
+            "Language input can be one of: --lang_emb_path, --lang_text, or --paraphrase_file."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument('--task_name', type=str, default='plate_out', help='RLBench task key from ip.utils.rl_bench_tasks.')
+    parser.add_argument('--num_rollouts', type=int, default=5, help='Number of evaluation episodes.')
+    parser.add_argument('--restrict_rot', type=int, default=1, help='Restrict task base rotation bounds [0,1].')
+    parser.add_argument('--compile_models', type=int, default=0, help='Compile teacher model modules before rollout [0,1].')
+    parser.add_argument(
+        '--model_path',
+        type=str,
+        default='./checkpoints/ip',
+        help='Directory containing teacher checkpoint files: model.pt and config.pkl.',
+    )
+    parser.add_argument('--lang_encoder_path', type=str, required=True, help='Path to trained language encoder .pt checkpoint.')
+    parser.add_argument(
+        '--lang_text',
+        type=str,
+        default=None,
+        help='Single instruction text to encode with Sentence-BERT. Ignored if --lang_emb_path is provided.',
+    )
+    parser.add_argument(
+        '--lang_emb_path',
+        type=str,
+        default=None,
+        help='Path to a precomputed language embedding tensor. If set, skips text encoding.',
+    )
+    parser.add_argument(
+        '--paraphrase_file',
+        type=str,
+        default=None,
+        help='Text file with one paraphrase per line for robustness evaluation.',
+    )
+    parser.add_argument('--lang_model_name', type=str, default='all-mpnet-base-v2', help='Sentence-Transformers model for text encoding.')
+    parser.add_argument('--device', type=str, default='cuda', help='Torch device for model and language embeddings.')
+    parser.add_argument('--seed', type=int, default=None, help='Optional random seed for reproducibility.')
     args = parser.parse_args()
 
     restrict_rot = bool(args.restrict_rot)

@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation as Rot
@@ -5,6 +8,19 @@ from ip.utils.common_utils import transform_pcd
 import torch
 from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_batch
+
+
+def _atomic_torch_save(obj, path: str):
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_data_", suffix=".pt", dir=parent)
+    os.close(fd)
+    try:
+        torch.save(obj, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def save_sample(sample, save_dir=None, offset=0, scene_encoder=None):
@@ -76,7 +92,7 @@ def save_sample(sample, save_dir=None, offset=0, scene_encoder=None):
         data.actions_grip = (data.actions_grip - 0.5) * 2
         data.T_w_e = torch.tensor(sample['live']['T_w_es'][i], dtype=torch.float32).unsqueeze(0)
         if save_dir is not None:
-            torch.save(data, f'{save_dir}/data_{k + offset}.pt')
+            _atomic_torch_save(data, f'{save_dir}/data_{k + offset}.pt')
             k += 1
         else:
             return data

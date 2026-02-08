@@ -30,9 +30,11 @@ config = {
     'weight_decay': 1e-2,
     'use_lr_scheduler': False,
     'num_warmup_steps': 1000,
+    'lr_cooldown_steps': 50000,
     'num_diffusion_iters_train': 100,
     'num_diffusion_iters_test': 8,
-    'num_iters': 50000000001,
+    # Paper setup: 2.5M optimisation steps + 50K LR cooldown steps.
+    'num_iters': 2550000,
 
     'test_every': 50000,
     'randomize_g_prob': 0.1,

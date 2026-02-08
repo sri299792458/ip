@@ -15,6 +15,7 @@ DATA_DIR="${DATA_DIR:-/scratch.global/$USER/ips}"
 CONTAINER_IMAGE="$SCRIPT_DIR/instant_policy.sif"
 DISPLAY_NUM="${RLBENCH_DISPLAY:-1}"
 VNC_PORT="${RLBENCH_VNC_PORT:-5900}"
+ENABLE_VNC="${RLBENCH_ENABLE_VNC:-1}"
 
 # Validation
 [ ! -f "$CONTAINER_IMAGE" ] && echo "ERROR: Container not found: $CONTAINER_IMAGE" && exit 1
@@ -51,7 +52,11 @@ cleanup_stale_processes() {
 echo "==================================="
 echo "Instant Policy + VNC"
 echo "Node: $(hostname)"
-echo "VNC: ssh -L $VNC_PORT:$(hostname):$VNC_PORT $USER@agate.msi.umn.edu"
+if [ "$ENABLE_VNC" = "1" ]; then
+    echo "VNC: ssh -L $VNC_PORT:$(hostname):$VNC_PORT $USER@agate.msi.umn.edu"
+else
+    echo "VNC: disabled (RLBENCH_ENABLE_VNC=0)"
+fi
 echo "==================================="
 
 cleanup_stale_processes
@@ -72,10 +77,11 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         export TRANSFORMERS_CACHE=/workspace/data/.cache/huggingface
         export HF_HOME=/workspace/data/.cache/huggingface
         export MPLCONFIGDIR=/workspace/data/.cache/matplotlib
+        # CoppeliaSim on Linux uses \$HOME/.CoppeliaSim/usrset.txt (or XDG_CONFIG_HOME if set).
+        # Keep this deterministic for popup suppression.
+        unset XDG_CONFIG_HOME
         mkdir -p /workspace/data/.cache/huggingface /workspace/data/.cache/matplotlib /workspace/data/.fluxbox \
-            /workspace/data/.CoppeliaSim /workspace/data/.CoppeliaSim/system \
-            /workspace/data/CoppeliaSim /workspace/data/CoppeliaSim/system \
-            /workspace/data/.config/CoppeliaSim /workspace/data/.config/CoppeliaSim/system
+            /workspace/data/.CoppeliaSim /workspace/data/.CoppeliaSim/system
 
         # Disable CoppeliaSim update popup (can block the sim)
         disable_updates() {
@@ -83,26 +89,28 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
             [ -z \"\$file\" ] && return 0
             mkdir -p \"\$(dirname \"\$file\")\"
             if [ ! -f \"\$file\" ]; then
-                printf 'checkForUpdates=0\ncheckForUpdatesOnStartup=0\n' > \"\$file\"
-                return 0
+                : > \"\$file\"
             fi
-            if grep -q '^checkForUpdates=' \"\$file\"; then
-                sed -i 's/^checkForUpdates=.*/checkForUpdates=0/' \"\$file\"
+            if grep -q '^doNotShowUpdateCheckMessage=' \"\$file\"; then
+                sed -i 's/^doNotShowUpdateCheckMessage=.*/doNotShowUpdateCheckMessage=1/' \"\$file\"
             else
-                printf '\ncheckForUpdates=0\n' >> \"\$file\"
+                printf '\ndoNotShowUpdateCheckMessage=1\n' >> \"\$file\"
             fi
-            if grep -q '^checkForUpdatesOnStartup=' \"\$file\"; then
-                sed -i 's/^checkForUpdatesOnStartup=.*/checkForUpdatesOnStartup=0/' \"\$file\"
+            if grep -q '^suppressStartupDialogs=' \"\$file\"; then
+                sed -i 's/^suppressStartupDialogs=.*/suppressStartupDialogs=1/' \"\$file\"
             else
-                printf '\ncheckForUpdatesOnStartup=0\n' >> \"\$file\"
+                printf '\nsuppressStartupDialogs=1\n' >> \"\$file\"
             fi
+            if grep -q '^noVersionCheck=' \"\$file\"; then
+                sed -i 's/^noVersionCheck=.*/noVersionCheck=1/' \"\$file\"
+            else
+                printf '\nnoVersionCheck=1\n' >> \"\$file\"
+            fi
+            # Remove legacy keys that CoppeliaSim ignores, to avoid confusion.
+            sed -i '/^checkForUpdates=/d;/^checkForUpdatesOnStartup=/d' \"\$file\"
         }
         disable_updates /workspace/data/.CoppeliaSim/usrset.txt
         disable_updates /workspace/data/.CoppeliaSim/system/usrset.txt
-        disable_updates /workspace/data/CoppeliaSim/usrset.txt
-        disable_updates /workspace/data/CoppeliaSim/system/usrset.txt
-        disable_updates /workspace/data/.config/CoppeliaSim/usrset.txt
-        disable_updates /workspace/data/.config/CoppeliaSim/system/usrset.txt
 
         # Ensure Qt runtime dir exists (prevents XDG_RUNTIME_DIR warnings/crashes)
         if [ -z \"\${XDG_RUNTIME_DIR:-}\" ] || [ ! -d \"\$XDG_RUNTIME_DIR\" ]; then
@@ -115,12 +123,18 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         export DISPLAY=:$DISPLAY_NUM
         Xvfb :$DISPLAY_NUM -screen 0 1280x1024x24 &
         sleep 2
-        x11vnc -display :$DISPLAY_NUM -forever -nopw -rfbport $VNC_PORT -noxdamage -nowf &
-        sleep 1
-        fluxbox &
-        sleep 1
+        if [ \"$ENABLE_VNC\" = \"1\" ]; then
+            x11vnc -display :$DISPLAY_NUM -forever -nopw -rfbport $VNC_PORT -noxdamage -nowf &
+            sleep 1
+            fluxbox &
+            sleep 1
+        fi
 
-        echo 'VNC server running on port $VNC_PORT'
+        if [ \"$ENABLE_VNC\" = \"1\" ]; then
+            echo 'VNC server running on port $VNC_PORT'
+        else
+            echo 'Running with Xvfb only (no VNC server)'
+        fi
         nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'WARNING: No GPU'
 
         # CoppeliaSim setup
@@ -140,8 +154,7 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         export COPPELIASIM_ROOT=\$COPPELIASIM_ROOT
         export LD_LIBRARY_PATH=\$COPPELIASIM_ROOT:\$LD_LIBRARY_PATH
         export QT_QPA_PLATFORM_PLUGIN_PATH=\$COPPELIASIM_ROOT
-        export COPPELIASIM_USER_SETTINGS_DIR=/workspace/data/.CoppeliaSim
-        export VREP_USER_SETTINGS_DIR=/workspace/data/.CoppeliaSim
+        # CoppeliaSim reads user settings from \$HOME/.CoppeliaSim/usrset.txt on Linux.
         disable_updates \"\$COPPELIASIM_ROOT/system/usrset.txt\"
 
         # Prefer system libstdc++/libgcc to avoid conda conflicts with CoppeliaSim
