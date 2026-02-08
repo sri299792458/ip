@@ -29,6 +29,20 @@ Make `trimesh` an explicit dependency of both local and apptainer environments.
 ### User-visible Effect
 - Rebuilt container images include `trimesh` and stop failing with `ModuleNotFoundError: trimesh`.
 
+## ShapeNet Index Path Robustness (2026-02-08)
+
+### Decision
+Make pseudo-demo generation robust when `--shapenet_index_path` parent directory does not exist.
+
+### Changed
+- `ip/generation/scene_builder.py` now creates the parent directory of `shapenet_index_path` before writing the index JSON.
+
+### Why
+- First-run generation failed with `FileNotFoundError` when `/workspace/data/pseudo_ring/` was missing.
+
+### User-visible Effect
+- Index creation no longer fails on missing parent folder; first run auto-creates it.
+
 ## Apptainer Path Defaults Cleanup (2026-02-08)
 
 ### Decision

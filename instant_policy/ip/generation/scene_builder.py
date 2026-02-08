@@ -98,6 +98,9 @@ class SceneBuilder:
             mesh_paths = mesh_paths[: self.max_meshes]
 
         if self.shapenet_index_path:
+            index_dir = os.path.dirname(self.shapenet_index_path)
+            if index_dir:
+                os.makedirs(index_dir, exist_ok=True)
             with open(self.shapenet_index_path, "w", encoding="utf-8") as f:
                 json.dump(mesh_paths, f)
         return mesh_paths
