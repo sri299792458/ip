@@ -26,6 +26,14 @@ class DepthRenderer:
         if gripper_mesh is None:
             gripper_mesh = trimesh.creation.icosphere(radius=0.015)
         self.gripper_mesh = pyrender.Mesh.from_trimesh(gripper_mesh, smooth=False)
+        blue_gripper = pyrender.MetallicRoughnessMaterial(
+            baseColorFactor=[0.12, 0.32, 0.95, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=0.7,
+        )
+        self.gripper_mesh_visual = pyrender.Mesh.from_trimesh(
+            gripper_mesh, material=blue_gripper, smooth=False
+        )
 
     def _mesh_key(self, mesh):
         return id(mesh)
@@ -51,7 +59,7 @@ class DepthRenderer:
         return points_world.astype(np.float32)
 
     def render_observation(self, scene, visual_idx: Optional[int] = None):
-        pyr_scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=[0.5, 0.5, 0.5])
+        pyr_scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0, 1.0], ambient_light=[0.5, 0.5, 0.5])
         for obj in scene.objects:
             mesh = self._get_mesh(obj.mesh)
             pyr_scene.add(mesh, pose=obj.pose)
@@ -92,11 +100,11 @@ class DepthRenderer:
         return points
 
     def render_visual(self, scene, gripper_pose: np.ndarray, visual_idx: int):
-        pyr_scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=[0.5, 0.5, 0.5])
+        pyr_scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0, 1.0], ambient_light=[0.5, 0.5, 0.5])
         for obj in scene.objects:
             mesh = self._get_mesh(obj.mesh)
             pyr_scene.add(mesh, pose=obj.pose)
-        pyr_scene.add(self.gripper_mesh, pose=gripper_pose)
+        pyr_scene.add(self.gripper_mesh_visual, pose=gripper_pose)
         light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
         pyr_scene.add(light, pose=np.eye(4))
         cam = self.cameras[visual_idx]

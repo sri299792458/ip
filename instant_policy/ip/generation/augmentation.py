@@ -20,7 +20,14 @@ class TrajectoryAugmenter:
         self.rot_noise_deg = rot_noise_deg
 
     def _copy_traj(self, traj: List[Waypoint]) -> List[Waypoint]:
-        return [Waypoint(pose=np.array(w.pose, copy=True), gripper_state=int(w.gripper_state)) for w in traj]
+        return [
+            Waypoint(
+                pose=np.array(w.pose, copy=True),
+                gripper_state=int(w.gripper_state),
+                obj_index=w.obj_index,
+            )
+            for w in traj
+        ]
 
     def _inject_disturbance(self, traj: List[Waypoint], rng: np.random.Generator):
         if len(traj) < 6:
@@ -68,4 +75,18 @@ class TrajectoryAugmenter:
             aug = self._inject_disturbance(aug, rng)
         aug = self._add_gripper_noise(aug, rng)
         aug = self._perturb_poses(aug, rng)
+        return aug
+
+    def augment_motion(self, traj: List[Waypoint], rng: np.random.Generator) -> List[Waypoint]:
+        """Augment poses only; keep gripper states unchanged for attachment dynamics."""
+        aug = self._copy_traj(traj)
+        if rng.uniform(0.0, 1.0) < self.disturbance_prob:
+            aug = self._inject_disturbance(aug, rng)
+        aug = self._perturb_poses(aug, rng)
+        return aug
+
+    def augment_gripper_labels(self, traj: List[Waypoint], rng: np.random.Generator) -> List[Waypoint]:
+        """Apply label-only gripper noise after dynamics/render simulation."""
+        aug = self._copy_traj(traj)
+        aug = self._add_gripper_noise(aug, rng)
         return aug

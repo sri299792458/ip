@@ -1212,3 +1212,72 @@ Keep closest-object matching simple and dependency-light by using sampled surfac
 ### Why
 - This restores the simple kinematic pseudo-data path without requiring spatial-index dependencies.
 - Avoids environment fragility across nodes while preserving the intended closest-object attach behavior.
+
+## Pseudo-Demo Rigid Attach Fix (2026-02-08)
+
+### Decision
+Decouple gripper-label noise from attachment dynamics so grasped objects remain rigidly attached during simulated motion.
+
+### Changed
+- `ip/generation/augmentation.py`:
+  - added `augment_motion(...)` for pose-only augmentation,
+  - added `augment_gripper_labels(...)` for label-only grip corruption.
+- `ip/generation/pseudo_demo_generator.py`:
+  - render/attach simulation now uses motion-augmented trajectory with clean grip states,
+  - 10% gripper-state noise is applied only after rendering to saved `grips`.
+- `ip/generation/README.md`:
+  - documented that gripper noise is post-simulation label corruption.
+
+### Why
+- Previously, per-timestep grip flips were injected before attachment simulation, causing artificial detach/reattach jitter and non-rigid “sliding” while grasped.
+- Paper-style robustness noise can be preserved without corrupting rigid-attachment kinematics.
+
+## Pseudo-Demo Grasp Sampling Robustness (2026-02-08)
+
+### Decision
+Fix pass-through grasp starts via better object-centric waypoint sampling, without adding collision solvers.
+
+### Changed
+- `ip/generation/waypoint_sampler.py`:
+  - top-down grasps now sample only top-facing surface points (`normal_z >= 0.2`) when available,
+  - surface normal orientation is corrected using center->surface radial direction (robust to mesh winding issues),
+  - grasp offset lower bound changed from `0.0` to `0.01 m` (non-zero clearance).
+
+### Why
+- Top-down approach on arbitrary surface points (including underside/side) can produce paths that appear to go through the object before grasp.
+- Zero offset can place the gripper immediately at contact/intersection.
+- This remains simple and paper-faithful (no explicit collision feasibility solver).
+
+## Pseudo-Demo Object-Centric Attach Semantics (2026-02-08)
+
+### Decision
+Make close-event attachment explicitly object-centric when waypoint specs target a specific object.
+
+### Changed
+- `ip/generation/waypoint_sampler.py`:
+  - `Waypoint` now carries `obj_index`,
+  - `resolve_waypoints` preserves `obj_index` from sampled specs.
+- `ip/generation/trajectory_interpolator.py`:
+  - interpolated waypoints preserve `obj_index` per segment endpoint.
+- `ip/generation/augmentation.py`:
+  - trajectory copy preserves `obj_index`.
+- `ip/generation/pseudo_demo_generator.py`:
+  - on open->closed, if current waypoint has `obj_index`, attachment is attempted only for that object (with `attach_radius` gate),
+  - nearest-object fallback is used only for waypoints without object target.
+
+### Why
+- First-principles object-centric generation should not randomly attach a different object during intended grasp transitions.
+- This removes a major source of non-rigid/semantically inconsistent demos while keeping the generator simple and kinematic.
+
+## Pseudo-Demo Render Styling (2026-02-08)
+
+### Decision
+Improve debug-render readability with white background and blue gripper.
+
+### Changed
+- `ip/generation/renderer.py`:
+  - render scenes use `bg_color=[1,1,1,1]`,
+  - added blue material for visual gripper mesh in `render_visual`.
+
+### Why
+- Easier visual inspection of gripper/object interaction in exported debug frames/videos.

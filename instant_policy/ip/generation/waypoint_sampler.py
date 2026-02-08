@@ -18,6 +18,7 @@ class WaypointSpec:
 class Waypoint:
     pose: np.ndarray
     gripper_state: int
+    obj_index: Optional[int] = None
 
 
 class WaypointSampler:
@@ -32,22 +33,50 @@ class WaypointSampler:
         self.bias_prob = bias_prob
         self.num_waypoints_range = num_waypoints_range
 
-    def _sample_surface_point(self, obj, rng: np.random.Generator):
-        idx = int(rng.integers(0, len(obj.surface_points)))
+    def _sample_surface_point(
+        self,
+        obj,
+        rng: np.random.Generator,
+        top_facing_only: bool = False,
+        min_top_normal_z: float = 0.2,
+    ):
+        if top_facing_only:
+            normals_world_all = (obj.pose[:3, :3] @ obj.surface_normals.T).T
+            top_idx = np.where(normals_world_all[:, 2] >= float(min_top_normal_z))[0]
+            if len(top_idx) > 0:
+                idx = int(rng.choice(top_idx))
+            else:
+                idx = int(rng.integers(0, len(obj.surface_points)))
+        else:
+            idx = int(rng.integers(0, len(obj.surface_points)))
+
         point_local = obj.surface_points[idx]
         normal_local = obj.surface_normals[idx]
         point_world = transform_points(point_local[None, :], obj.pose)[0]
         normal_world = obj.pose[:3, :3] @ normal_local
         normal_world = normal_world / (np.linalg.norm(normal_world) + 1e-8)
+
+        # Make normal orientation robust for meshes with inconsistent winding:
+        # enforce outward direction using center->surface radial direction.
+        radial = point_world - obj.pose[:3, 3]
+        if float(np.dot(normal_world, radial)) < 0.0:
+            normal_world = -normal_world
+        normal_world = normal_world / (np.linalg.norm(normal_world) + 1e-8)
         return point_world, normal_world
 
     def _sample_object_pose(self, obj, rng: np.random.Generator):
-        point_world, normal_world = self._sample_surface_point(obj, rng)
-        if rng.uniform(0.0, 1.0) < 0.7:
+        top_down = rng.uniform(0.0, 1.0) < 0.7
+        point_world, normal_world = self._sample_surface_point(
+            obj,
+            rng,
+            top_facing_only=top_down,
+        )
+        if top_down:
             approach = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         else:
             approach = -normal_world
-        offset = rng.uniform(0.0, 0.05)
+        # Keep a non-zero clearance to avoid initial interpenetration.
+        offset = rng.uniform(0.01, 0.05)
         position = point_world - approach * offset
         return pose_from_approach(position, approach, rng)
 
@@ -176,5 +205,11 @@ class WaypointSampler:
             else:
                 obj_pose = scene.objects[spec.obj_index].pose
                 pose = obj_pose @ spec.pose
-            waypoints.append(Waypoint(pose=pose, gripper_state=int(spec.gripper_state)))
+            waypoints.append(
+                Waypoint(
+                    pose=pose,
+                    gripper_state=int(spec.gripper_state),
+                    obj_index=spec.obj_index,
+                )
+            )
         return waypoints

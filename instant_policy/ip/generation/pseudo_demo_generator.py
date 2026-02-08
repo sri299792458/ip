@@ -166,6 +166,16 @@ class PseudoDemoGenerator:
             return None, None
         return best_idx, best_dist
 
+    def _object_distance(self, scene: Scene, gripper_pose: np.ndarray, obj_index: int):
+        if obj_index < 0 or obj_index >= len(scene.objects):
+            return None
+        grip_pts = transform_points(self.gripper_surface_points, gripper_pose)
+        obj = scene.objects[obj_index]
+        obj_pts = transform_points(obj.surface_points, obj.pose)
+        diff = obj_pts[:, None, :] - grip_pts[None, :, :]
+        d_sq = np.einsum("ijk,ijk->ij", diff, diff)
+        return float(np.sqrt(np.min(d_sq)))
+
     def _render_trajectory(self, scene: Scene, traj: List[Waypoint]):
         pcds = []
         adjusted_traj = []
@@ -185,7 +195,19 @@ class PseudoDemoGenerator:
             elif grip != last_grip:
                 # Paper Appendix D: attach/detach when gripper state changes.
                 if grip == self.CLOSED and last_grip == self.OPEN and self.config.attach_on_grasp:
-                    obj_idx, best_dist = self._closest_object(scene, pose)
+                    obj_idx = None
+                    best_dist = None
+                    # First-principles object-centric behavior:
+                    # if this waypoint targets an object, attach only that object.
+                    if w.obj_index is not None:
+                        d = self._object_distance(scene, pose, int(w.obj_index))
+                        if d is not None and d <= self.config.attach_radius:
+                            obj_idx = int(w.obj_index)
+                            best_dist = d
+                    else:
+                        # For non-object-centric waypoints, use nearest object.
+                        obj_idx, best_dist = self._closest_object(scene, pose)
+
                     if obj_idx is not None and best_dist is not None and best_dist <= self.config.attach_radius:
                         obj = scene.objects[obj_idx]
                         attached_idx = obj_idx
@@ -205,7 +227,7 @@ class PseudoDemoGenerator:
                     "paper setup expects segmented observations from 3 depth cameras."
                 )
             pcds.append(pcd)
-            adjusted_traj.append(Waypoint(pose=pose, gripper_state=grip))
+            adjusted_traj.append(Waypoint(pose=pose, gripper_state=grip, obj_index=w.obj_index))
             if render_dir is not None and len(pcds) % render_stride == 0:
                 color, depth = self.renderer.render_visual(scene, pose, visual_idx)
                 frame_idx = len(pcds) - 1
@@ -261,16 +283,19 @@ class PseudoDemoGenerator:
         start_pose = self._sample_start_pose(rng)
         waypoints = self.waypoint_sampler.resolve_waypoints(scene, waypoint_specs)
         start_grip = waypoints[0].gripper_state if waypoints else int(rng.integers(0, 2))
-        waypoints = [Waypoint(pose=start_pose, gripper_state=start_grip)] + waypoints
+        waypoints = [Waypoint(pose=start_pose, gripper_state=start_grip, obj_index=None)] + waypoints
         method = rng.choice(self.config.interpolation_methods)
         traj = self.interpolator.interpolate(waypoints, method=method)
-        traj = self.augmenter.augment(traj, rng)
+        # Keep attachment physics driven by clean gripper transitions.
+        # Paper-style 10% gripper corruption is applied to saved labels later.
+        traj = self.augmenter.augment_motion(traj, rng)
         traj = self.interpolator.interpolate(traj, method="linear")
-        pcds, traj = self._render_trajectory(scene, traj)
+        pcds, dyn_traj = self._render_trajectory(scene, traj)
+        label_traj = self.augmenter.augment_gripper_labels(dyn_traj, rng)
         sample = {
             "pcds": pcds,
-            "T_w_es": [w.pose for w in traj],
-            "grips": [w.gripper_state for w in traj],
+            "T_w_es": [w.pose for w in dyn_traj],
+            "grips": [w.gripper_state for w in label_traj],
         }
         return sample
 

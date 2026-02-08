@@ -80,8 +80,9 @@ Use `trajectory` for large-scale continuous generation.
 3. Generate multiple demos per task by varying start pose and scene perturbation.
 4. Interpolate and resample trajectory at fixed spacing.
 5. Attach/detach closest object on gripper state transitions only when within contact radius.
-6. Render object point clouds from depth cameras.
-7. Store in chosen format (`steps` or `trajectory`).
+6. Render object point clouds from depth cameras using clean gripper transitions (rigid attachment).
+7. Apply 10% gripper-state corruption to stored labels (not to attachment dynamics).
+8. Store in chosen format (`steps` or `trajectory`).
 
 ## Gripper Mesh Policy
 
@@ -91,8 +92,10 @@ Use `trajectory` for large-scale continuous generation.
 - This is sufficient for paper-style pseudo-data; full finger articulation simulation is not required.
 - Loaded mesh is translated to the policy-origin frame so waypoint/contact sampling matches the same convention used by deployment/model inputs (`flange/base -> policy-origin = 0.088 m`).
 - Contact is event-based:
-  - close transition attaches nearest object only if distance <= `attach_radius`.
+  - close transition attaches waypoint-target object (object-centric) if specified and within `attach_radius`.
+  - for non-object-centric waypoints, nearest-object attach is used.
   - open transition detaches.
+- Gripper label noise (`gripper_noise_prob`) is applied after render/simulation, so grasped-object motion remains rigid during pseudo trajectory synthesis.
 
 ## Commands
 

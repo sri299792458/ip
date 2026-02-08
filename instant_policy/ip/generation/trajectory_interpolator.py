@@ -64,7 +64,8 @@ class TrajectoryInterpolator:
             pose[:3, :3] = rot.astype(np.float32)
             pose[:3, 3] = pos.astype(np.float32)
             grip = w0.gripper_state if i < len(ts) - 1 else w1.gripper_state
-            segment.append(Waypoint(pose=pose, gripper_state=int(grip)))
+            obj_index = w0.obj_index if i < len(ts) - 1 else w1.obj_index
+            segment.append(Waypoint(pose=pose, gripper_state=int(grip), obj_index=obj_index))
         return segment
 
     def interpolate(self, waypoints: List[Waypoint], method: str = "linear") -> List[Waypoint]:
