@@ -24,14 +24,19 @@ class Waypoint:
 class WaypointSampler:
     OPEN = 1
     CLOSED = 0
+    VALID_SKILLS = ("random", "grasp", "pick_place", "open", "close")
 
     def __init__(
         self,
         bias_prob: float,
         num_waypoints_range: Tuple[int, int],
+        forced_skill: Optional[str] = None,
     ):
         self.bias_prob = bias_prob
         self.num_waypoints_range = num_waypoints_range
+        if forced_skill is not None and forced_skill not in self.VALID_SKILLS:
+            raise ValueError(f"Invalid forced_skill={forced_skill}. Expected one of {self.VALID_SKILLS}.")
+        self.forced_skill = forced_skill
 
     def _sample_surface_point(
         self,
@@ -186,6 +191,17 @@ class WaypointSampler:
         return waypoints
 
     def sample_waypoint_specs(self, scene: Scene, rng: np.random.Generator) -> List[WaypointSpec]:
+        if self.forced_skill is not None:
+            if self.forced_skill == "random":
+                return self._random_waypoints(scene, rng)
+            if self.forced_skill == "grasp":
+                return self._grasp_waypoints(scene, rng)
+            if self.forced_skill == "pick_place":
+                return self._pick_place_waypoints(scene, rng)
+            if self.forced_skill == "open":
+                return self._open_waypoints(scene, rng)
+            return self._close_waypoints(scene, rng)
+
         if rng.uniform(0.0, 1.0) < self.bias_prob:
             skill = rng.choice(["grasp", "pick_place", "open", "close"])
             if skill == "grasp":

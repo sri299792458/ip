@@ -20,6 +20,7 @@ def build_config(args):
         num_context_range=tuple(args.num_context_range),
         num_waypoints_range=tuple(args.num_waypoints_range),
         bias_prob=args.bias_prob,
+        forced_skill=None if args.force_skill == "auto" else args.force_skill,
         num_objects_range=tuple(args.num_objects_range),
         object_scale_range=tuple(args.object_scale_range),
         trans_spacing=args.trans_spacing,
@@ -78,6 +79,13 @@ def main():
     parser.add_argument("--num_context_range", type=int, nargs=2, default=[1, 5])
     parser.add_argument("--randomize_num_demos", action="store_true")
     parser.add_argument("--bias_prob", type=float, default=0.5)
+    parser.add_argument(
+        "--force_skill",
+        type=str,
+        default="auto",
+        choices=["auto", "random", "grasp", "pick_place", "open", "close"],
+        help="Force one waypoint category for debug generation; auto keeps default 50/50 behavior.",
+    )
     parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.07, 0.13])
     parser.add_argument("--trans_spacing", type=float, default=0.01)
     parser.add_argument("--rot_spacing_deg", type=float, default=3.0)

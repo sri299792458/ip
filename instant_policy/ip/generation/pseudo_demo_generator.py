@@ -53,6 +53,7 @@ class PseudoDemoGenerator:
         self.waypoint_sampler = WaypointSampler(
             bias_prob=config.bias_prob,
             num_waypoints_range=config.num_waypoints_range,
+            forced_skill=config.forced_skill,
         )
         self.interpolator = TrajectoryInterpolator(
             trans_spacing=config.trans_spacing,

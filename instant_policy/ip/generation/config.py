@@ -41,6 +41,7 @@ class GenerationConfig:
     num_context_range: Tuple[int, int] = (1, 5)
     num_waypoints_range: Tuple[int, int] = (2, 6)
     bias_prob: float = 0.5
+    forced_skill: Optional[str] = None  # One of: random, grasp, pick_place, open, close.
     num_objects_range: Tuple[int, int] = (2, 2)
 
     workspace_bounds: np.ndarray = field(default_factory=lambda: np.array([

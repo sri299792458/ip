@@ -138,6 +138,25 @@ python -m ip.scripts.generate_pseudo_demos \
   --render_dir /scratch/.../pseudo/renders
 ```
 
+Render one video per task category (debug):
+
+```bash
+for SKILL in random grasp pick_place open close; do
+  python -m ip.scripts.generate_pseudo_demos \
+    --shapenet_path /scratch.global/$USER/ShapeNetCore.v2 \
+    --save_dir /scratch/.../pseudo_debug/$SKILL/tasks \
+    --num_tasks 1 \
+    --storage_format trajectory \
+    --force_skill "$SKILL" \
+    --gripper_mesh_path /scratch/.../robotiq_2f85_collision_open.obj \
+    --save_renders \
+    --render_dir /scratch/.../pseudo_debug/$SKILL/renders \
+    --render_make_videos \
+    --render_video_dir /scratch/.../pseudo_debug/$SKILL/videos \
+    --render_video_fps 15
+done
+```
+
 ## Ring Buffer Guidance
 
 Paper requires continuous generation with replacement; exact buffer size is an implementation choice.

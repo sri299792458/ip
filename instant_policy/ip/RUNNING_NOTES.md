@@ -11,6 +11,32 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Pseudo-Demo Category Debugging (2026-02-08)
+
+### Decision
+Add deterministic category forcing for pseudo-demo generation so each task type can be inspected independently in render videos.
+
+### Changed
+- `ip/scripts/generate_pseudo_demos.py`
+  - added `--force_skill {auto,random,grasp,pick_place,open,close}`.
+  - `auto` keeps default stochastic behavior; other values force one category.
+- `ip/generation/config.py`
+  - added `forced_skill` to generation config.
+- `ip/generation/waypoint_sampler.py`
+  - supports deterministic category override when `forced_skill` is set.
+  - validates allowed category names.
+- `ip/generation/pseudo_demo_generator.py`
+  - passes `forced_skill` into waypoint sampler.
+- `ip/generation/README.md`
+  - added loop command to render one debug video set per category.
+
+### Why
+- Random sampling makes it hard to isolate where a specific category is failing.
+- Deterministic per-category runs make debugging penetration/attach/motion issues faster and repeatable.
+
+### User-visible Effect
+- You can now generate category-specific debug renders/videos without seed hunting.
+
 ## Container Dependency Fix (2026-02-08)
 
 ### Decision
