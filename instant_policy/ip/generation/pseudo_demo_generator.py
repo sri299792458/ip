@@ -6,8 +6,6 @@ import numpy as np
 import trimesh
 from tqdm import tqdm
 
-from glob import glob
-
 import torch
 
 try:
@@ -177,13 +175,12 @@ class PseudoDemoGenerator:
         d_sq = np.einsum("ijk,ijk->ij", diff, diff)
         return float(np.sqrt(np.min(d_sq)))
 
-    def _render_trajectory(self, scene: Scene, traj: List[Waypoint]):
+    def _render_trajectory(self, scene: Scene, traj: List[Waypoint], render_dir: Optional[str] = None, video_writer=None):
         pcds = []
         adjusted_traj = []
         attached_idx = None
         attached_offset = None
         last_grip = None
-        render_dir = getattr(scene, "_render_dir", None)
         render_stride = max(1, int(self.config.render_stride))
         visual_idx = int(self.config.render_visual_camera)
         if visual_idx < 0 or visual_idx >= len(self.renderer.cameras):
@@ -229,10 +226,13 @@ class PseudoDemoGenerator:
                 )
             pcds.append(pcd)
             adjusted_traj.append(Waypoint(pose=pose, gripper_state=grip, obj_index=w.obj_index))
-            if render_dir is not None and len(pcds) % render_stride == 0:
+            if (render_dir is not None or video_writer is not None) and len(pcds) % render_stride == 0:
                 color, depth = self.renderer.render_visual(scene, pose, visual_idx)
                 frame_idx = len(pcds) - 1
-                self._save_render_frame(render_dir, frame_idx, color, depth)
+                if render_dir is not None:
+                    self._save_render_frame(render_dir, frame_idx, color, depth)
+                if video_writer is not None:
+                    video_writer.append_data(color)
         return pcds, adjusted_traj
 
     def _save_render_frame(self, render_dir, frame_idx, color, depth):
@@ -259,28 +259,26 @@ class PseudoDemoGenerator:
                 import matplotlib.pyplot as plt
                 plt.imsave(depth_path, depth_vis, cmap="gray")
 
-    def _write_demo_video(self, render_dir, video_dir=None):
-        if not self.config.render_make_videos:
-            return
+    def _open_video_writer(self, video_dir: Optional[str]):
+        if not self.config.render_make_videos or video_dir is None:
+            return None
         if imageio is None:
             print("imageio not available; skipping video generation.")
-            return
-        frames = sorted(glob(os.path.join(render_dir, "frame_*.png")))
-        if not frames:
-            return
-        if video_dir is None:
-            video_dir = render_dir
+            return None
         os.makedirs(video_dir, exist_ok=True)
         out_path = os.path.join(video_dir, f"demo.{self.config.render_video_ext}")
-        writer = imageio.get_writer(out_path, fps=self.config.render_video_fps)
-        for frame in frames:
-            writer.append_data(imageio.imread(frame))
-        writer.close()
+        return imageio.get_writer(out_path, fps=self.config.render_video_fps)
 
-    def generate_demo(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator, render_dir: Optional[str] = None):
+    def generate_demo(
+        self,
+        base_scene: Scene,
+        waypoint_specs,
+        rng: np.random.Generator,
+        render_dir: Optional[str] = None,
+        video_dir: Optional[str] = None,
+    ):
         scene = self._vary_scene(base_scene, rng)
-        if render_dir is not None:
-            scene._render_dir = render_dir
+        video_writer = self._open_video_writer(video_dir)
         start_pose = self._sample_start_pose(rng)
         waypoints = self.waypoint_sampler.resolve_waypoints(scene, waypoint_specs)
         start_grip = waypoints[0].gripper_state if waypoints else int(rng.integers(0, 2))
@@ -291,7 +289,16 @@ class PseudoDemoGenerator:
         # Paper-style 10% gripper corruption is applied to saved labels later.
         traj = self.augmenter.augment_motion(traj, rng)
         traj = self.interpolator.interpolate(traj, method="linear")
-        pcds, dyn_traj = self._render_trajectory(scene, traj)
+        try:
+            pcds, dyn_traj = self._render_trajectory(
+                scene,
+                traj,
+                render_dir=render_dir,
+                video_writer=video_writer,
+            )
+        finally:
+            if video_writer is not None:
+                video_writer.close()
         label_traj = self.augmenter.augment_gripper_labels(dyn_traj, rng)
         sample = {
             "pcds": pcds,
@@ -306,22 +313,30 @@ class PseudoDemoGenerator:
         num_demos = int(rng.integers(self.config.num_demos_per_task[0], self.config.num_demos_per_task[1] + 1))
         demos = []
         render_root = self.config.render_dir or os.path.join(self.config.save_dir, "_renders")
+        if self.config.render_video_dir is not None:
+            video_root = self.config.render_video_dir
+        elif self.config.save_renders:
+            video_root = render_root
+        else:
+            video_root = os.path.join(self.config.save_dir, "_videos")
         for demo_idx in range(num_demos):
+            task_tag = "task" if task_idx is None else f"task_{task_idx:06d}"
+            demo_tag = f"demo_{demo_idx:02d}"
             render_dir = None
             if self.config.save_renders:
-                if task_idx is None:
-                    task_tag = "task"
-                else:
-                    task_tag = f"task_{task_idx:06d}"
-                render_dir = os.path.join(render_root, task_tag, f"demo_{demo_idx:02d}")
-            demos.append(self.generate_demo(base_scene, waypoint_specs, rng, render_dir=render_dir))
-            if render_dir is not None and self.config.render_make_videos:
-                if self.config.render_video_dir is None:
-                    video_dir = render_dir
-                else:
-                    rel = os.path.relpath(render_dir, render_root)
-                    video_dir = os.path.join(self.config.render_video_dir, rel)
-                self._write_demo_video(render_dir, video_dir=video_dir)
+                render_dir = os.path.join(render_root, task_tag, demo_tag)
+            video_dir = None
+            if self.config.render_make_videos:
+                video_dir = os.path.join(video_root, task_tag, demo_tag)
+            demos.append(
+                self.generate_demo(
+                    base_scene,
+                    waypoint_specs,
+                    rng,
+                    render_dir=render_dir,
+                    video_dir=video_dir,
+                )
+            )
         return demos
 
     def _build_samples(self, demos: List[dict], rng: np.random.Generator):

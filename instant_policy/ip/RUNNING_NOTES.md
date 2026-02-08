@@ -37,6 +37,30 @@ Add deterministic category forcing for pseudo-demo generation so each task type 
 ### User-visible Effect
 - You can now generate category-specific debug renders/videos without seed hunting.
 
+## Video-Only Render Export (2026-02-08)
+
+### Decision
+Allow pseudo-demo video generation without storing per-frame render PNGs.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`
+  - video writing now happens inline during trajectory rendering (streaming writer).
+  - `--render_make_videos` no longer depends on `--save_renders`.
+  - when `render_video_dir` is not set:
+    - if `save_renders=true`, videos default under render folders.
+    - if `save_renders=false`, videos default under `<save_dir>/_videos`.
+- `ip/scripts/generate_pseudo_demos.py`
+  - clarified CLI help text for `--save_renders`, `--render_make_videos`, and `--render_video_dir`.
+- `ip/generation/README.md`
+  - added explicit video-only command.
+  - category-debug loop now renders videos without frame dumps.
+
+### Why
+- Frame PNGs consume significant storage and are unnecessary for routine debugging when MP4 output is sufficient.
+
+### User-visible Effect
+- You can run with `--render_make_videos` alone and only get videos on disk.
+
 ## Container Dependency Fix (2026-02-08)
 
 ### Decision

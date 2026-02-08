@@ -99,13 +99,18 @@ def main():
         required=True,
         help="Robotiq 2F-85 mesh path (OBJ/PLY/STL) in meters; required for paper-fidelity generation.",
     )
-    parser.add_argument("--save_renders", action="store_true")
-    parser.add_argument("--render_dir", type=str, default=None)
+    parser.add_argument("--save_renders", action="store_true", help="Save per-frame RGB/optional depth PNGs.")
+    parser.add_argument("--render_dir", type=str, default=None, help="Directory root for frame PNG dumps.")
     parser.add_argument("--render_stride", type=int, default=1)
     parser.add_argument("--render_visual_camera", type=int, default=0)
     parser.add_argument("--render_save_depth", action="store_true")
-    parser.add_argument("--render_make_videos", action="store_true")
-    parser.add_argument("--render_video_dir", type=str, default=None)
+    parser.add_argument("--render_make_videos", action="store_true", help="Write demo videos without requiring frame dumps.")
+    parser.add_argument(
+        "--render_video_dir",
+        type=str,
+        default=None,
+        help="Directory root for demo videos. Defaults to render_dir when saving frames, else <save_dir>/_videos.",
+    )
     parser.add_argument("--render_video_fps", type=int, default=15)
     parser.add_argument("--render_video_ext", type=str, default="mp4")
 
