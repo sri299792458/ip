@@ -1104,3 +1104,32 @@ Bring pseudo-demo generation closer to Appendix D wording by explicitly modeling
 ### Why
 - Appendix D explicitly states pseudo-demo generation initializes a Robotiq 2F-85 gripper mesh and attaches/detaches closest objects on gripper-state changes.
 - Waypoint perturbation per demo weakened pseudo-task consistency; object pose randomization and start-pose randomization are sufficient and closer to the paper description.
+
+## Pseudo-Demo Penetration Fix + Scale Prior (2026-02-08)
+
+### Decision
+Keep object size prior at `0.07..0.13 m` and fix gripper-object penetration via explicit contact gating and pose de-penetration.
+
+### Changed
+- `ip/generation/config.py`:
+  - `object_scale_range` default set to `(0.07, 0.13)`,
+  - `attach_radius` default set to `0.02` (meters),
+  - added `depenetration_clearance_m=0.003`,
+  - added `depenetration_max_iters=4`.
+- `ip/scripts/generate_pseudo_demos.py`:
+  - CLI default `--object_scale_range 0.07 0.13`,
+  - added `--attach_radius`,
+  - added `--depenetration_clearance_m`,
+  - added `--depenetration_max_iters`.
+- `ip/generation/pseudo_demo_generator.py`:
+  - closest-object query now returns closest distance and push direction,
+  - added per-step de-penetration projection before rendering/state save,
+  - attach now requires contact (`closest_dist <= attach_radius`) on open->closed transition,
+  - rendered/saved `T_w_e` now use the corrected (de-penetrated) pose.
+- `ip/generation/README.md`:
+  - documented `0.07..0.13 m` prior and the new attach/de-penetration behavior.
+
+### Why
+- Unbounded nearest-object attach (no distance gate) can create unrealistic teleport-style grasping.
+- Pose noise/interpolation can place the gripper mesh slightly inside objects; projecting to a small positive clearance removes this artifact while keeping trajectories smooth.
+- Keeping corrected poses in saved demos avoids observation/pose mismatch.

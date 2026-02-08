@@ -118,26 +118,50 @@ class PseudoDemoGenerator:
             obj.pose[:3, 3] += pos_noise.astype(np.float32)
         return varied
 
-    def _closest_object(self, scene: Scene, gripper_pose: np.ndarray):
+    def _closest_object(self, scene: Scene, gripper_pose: np.ndarray, ignore_idx: Optional[int] = None):
         grip_pts = transform_points(self.gripper_surface_points, gripper_pose)
         best_idx = None
         best_dist = None
+        best_dir = None
         for idx, obj in enumerate(scene.objects):
+            if ignore_idx is not None and idx == ignore_idx:
+                continue
             obj_pts = transform_points(obj.surface_points, obj.pose)
+            diff = grip_pts[None, :, :] - obj_pts[:, None, :]
             # Distance between two sampled surfaces (object and gripper mesh).
-            d = np.linalg.norm(obj_pts[:, None, :] - grip_pts[None, :, :], axis=2)
-            dist = float(np.min(d))
+            d_sq = np.einsum("ijk,ijk->ij", diff, diff)
+            flat_idx = int(np.argmin(d_sq))
+            obj_i, grip_i = np.unravel_index(flat_idx, d_sq.shape)
+            dist = float(np.sqrt(d_sq[obj_i, grip_i]))
             if best_dist is None or dist < best_dist:
                 best_dist = dist
                 best_idx = idx
+                push = diff[obj_i, grip_i]
+                push_norm = float(np.linalg.norm(push))
+                if push_norm < 1e-8:
+                    push_dir = -gripper_pose[:3, 2]
+                else:
+                    push_dir = push / push_norm
+                best_dir = push_dir.astype(np.float32)
         if best_idx is None:
-            return None
-        if self.config.attach_radius is not None and best_dist is not None and best_dist > self.config.attach_radius:
-            return None
-        return best_idx
+            return None, None, None
+        return best_idx, best_dist, best_dir
+
+    def _depenetrate_pose(self, scene: Scene, pose: np.ndarray, ignore_idx: Optional[int] = None):
+        clearance = float(self.config.depenetration_clearance_m)
+        if clearance <= 0.0:
+            return pose
+        corrected = np.array(pose, copy=True)
+        for _ in range(int(self.config.depenetration_max_iters)):
+            _, dist, push_dir = self._closest_object(scene, corrected, ignore_idx=ignore_idx)
+            if dist is None or push_dir is None or dist >= clearance:
+                break
+            corrected[:3, 3] += push_dir * (clearance - dist + 1e-4)
+        return corrected
 
     def _render_trajectory(self, scene: Scene, traj: List[Waypoint]):
         pcds = []
+        adjusted_traj = []
         attached_idx = None
         attached_offset = None
         last_grip = None
@@ -148,23 +172,24 @@ class PseudoDemoGenerator:
             visual_idx = 0
         for w in traj:
             grip = int(w.gripper_state)
+            pose = self._depenetrate_pose(scene, w.pose, ignore_idx=attached_idx)
             if last_grip is None:
                 last_grip = grip
             elif grip != last_grip:
                 # Paper Appendix D: attach/detach when gripper state changes.
                 if grip == self.CLOSED and last_grip == self.OPEN and self.config.attach_on_grasp:
-                    obj_idx = self._closest_object(scene, w.pose)
-                    if obj_idx is not None:
+                    obj_idx, best_dist, _ = self._closest_object(scene, pose)
+                    if obj_idx is not None and best_dist is not None and best_dist <= self.config.attach_radius:
                         obj = scene.objects[obj_idx]
                         attached_idx = obj_idx
-                        attached_offset = np.linalg.inv(w.pose) @ obj.pose
+                        attached_offset = np.linalg.inv(pose) @ obj.pose
                 elif grip == self.OPEN and last_grip == self.CLOSED:
                     attached_idx = None
                     attached_offset = None
                 last_grip = grip
             if attached_idx is not None and attached_offset is not None:
                 obj = scene.objects[attached_idx]
-                obj.pose = w.pose @ attached_offset
+                obj.pose = pose @ attached_offset
             pcd = self.renderer.render_observation(scene)
             color, depth = None, None
             if pcd.size == 0:
@@ -173,11 +198,12 @@ class PseudoDemoGenerator:
                     "paper setup expects segmented observations from 3 depth cameras."
                 )
             pcds.append(pcd)
+            adjusted_traj.append(Waypoint(pose=pose, gripper_state=grip))
             if render_dir is not None and len(pcds) % render_stride == 0:
-                color, depth = self.renderer.render_visual(scene, w.pose, visual_idx)
+                color, depth = self.renderer.render_visual(scene, pose, visual_idx)
                 frame_idx = len(pcds) - 1
                 self._save_render_frame(render_dir, frame_idx, color, depth)
-        return pcds
+        return pcds, adjusted_traj
 
     def _save_render_frame(self, render_dir, frame_idx, color, depth):
         os.makedirs(render_dir, exist_ok=True)
@@ -233,7 +259,7 @@ class PseudoDemoGenerator:
         traj = self.interpolator.interpolate(waypoints, method=method)
         traj = self.augmenter.augment(traj, rng)
         traj = self.interpolator.interpolate(traj, method="linear")
-        pcds = self._render_trajectory(scene, traj)
+        pcds, traj = self._render_trajectory(scene, traj)
         sample = {
             "pcds": pcds,
             "T_w_es": [w.pose for w in traj],

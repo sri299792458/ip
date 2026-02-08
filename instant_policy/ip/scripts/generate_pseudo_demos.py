@@ -27,6 +27,9 @@ def build_config(args):
         disturbance_prob=args.disturbance_prob,
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
+        attach_radius=args.attach_radius,
+        depenetration_clearance_m=args.depenetration_clearance_m,
+        depenetration_max_iters=args.depenetration_max_iters,
         gripper_mesh_path=args.gripper_mesh_path,
         seed=args.seed,
         save_renders=args.save_renders,
@@ -77,12 +80,15 @@ def main():
     parser.add_argument("--num_context_range", type=int, nargs=2, default=[1, 5])
     parser.add_argument("--randomize_num_demos", action="store_true")
     parser.add_argument("--bias_prob", type=float, default=0.5)
-    parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.05, 0.15])
+    parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.07, 0.13])
     parser.add_argument("--trans_spacing", type=float, default=0.01)
     parser.add_argument("--rot_spacing_deg", type=float, default=3.0)
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
+    parser.add_argument("--attach_radius", type=float, default=0.02)
+    parser.add_argument("--depenetration_clearance_m", type=float, default=0.003)
+    parser.add_argument("--depenetration_max_iters", type=int, default=4)
     parser.add_argument(
         "--gripper_mesh_path",
         type=str,

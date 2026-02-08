@@ -29,6 +29,7 @@ This module implements the pseudo-demonstration pipeline used to train Instant P
 
 These are the defaults we treat as paper-canonical for pseudo generation:
 - two objects on a plane (`num_objects_range=(2,2)`)
+- object metric scale prior `0.07..0.13 m` (`object_scale_range`)
 - pseudo-task waypoints `2..6` (`num_waypoints_range`)
 - biased/random mix `50/50` (`bias_prob=0.5`)
 - interpolation spacing `1cm / 3deg` (`trans_spacing=0.01`, `rot_spacing_deg=3.0`)
@@ -36,6 +37,8 @@ These are the defaults we treat as paper-canonical for pseudo generation:
 - gripper-noise `10%` (`gripper_noise_prob=0.1`)
 - Robotiq 2F-85 mesh required (`--gripper_mesh_path`)
 - attach on open->closed and detach on closed->open
+- contact-gated attach radius (`attach_radius=0.02 m`)
+- de-penetration projection (`depenetration_clearance_m=0.003`, `depenetration_max_iters=4`)
 - three depth cameras rendered via PyRender
 
 Reference files:
@@ -76,9 +79,10 @@ Use `trajectory` for large-scale continuous generation.
 2. Sample pseudo-task waypoint specs (object-relative).
 3. Generate multiple demos per task by varying start pose and scene perturbation.
 4. Interpolate and resample trajectory at fixed spacing.
-5. Attach/detach closest object on gripper state transitions.
-6. Render object point clouds from depth cameras.
-7. Store in chosen format (`steps` or `trajectory`).
+5. Project gripper pose out of object penetration (small clearance).
+6. Attach/detach closest object on gripper state transitions only when within contact radius.
+7. Render object point clouds from depth cameras.
+8. Store in chosen format (`steps` or `trajectory`).
 
 ## Gripper Mesh Policy
 
@@ -86,6 +90,10 @@ Use `trajectory` for large-scale continuous generation.
 - Use `build_robotiq_mesh` to create a metric Robotiq 2F-85 mesh.
 - We use a fixed jaw state mesh (usually `open`) for proximity checks.
 - This is sufficient for paper-style pseudo-data; full finger articulation simulation is not required.
+- Contact is event-based:
+  - close transition attaches nearest object only if distance <= `attach_radius`.
+  - open transition detaches.
+- A small de-penetration projection keeps the gripper outside object surfaces before each rendered step.
 
 ## Commands
 
@@ -160,6 +168,7 @@ If RGB renders look static, this can still be correct:
 - Headless render failure: set `PYOPENGL_PLATFORM=egl`.
 - Storage explosion: use `trajectory` mode + ring buffer.
 - Unexpected no-motion visuals: verify gripper state transitions and attachment behavior.
+- If the gripper appears to pass through objects: lower `attach_radius` and/or raise `depenetration_clearance_m` slightly.
 
 ## Dependencies
 
