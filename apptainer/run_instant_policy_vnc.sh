@@ -62,6 +62,17 @@ done
 
 [ -d "/usr/share/vulkan/icd.d" ] && BIND_LIBS="$BIND_LIBS --bind /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d"
 
+# pyrender/pyglet may require libGLU, which is not always present in the image.
+GLU_FOUND=""
+for d in /usr/lib64 /usr/lib/x86_64-linux-gnu /lib64 /lib/x86_64-linux-gnu; do
+    if [ -z "$GLU_FOUND" ] && [ -d "$d" ]; then
+        GLU_FOUND=$(find "$d" -maxdepth 1 -name 'libGLU.so*' 2>/dev/null | head -1 || true)
+    fi
+done
+if [ -n "$GLU_FOUND" ]; then
+    BIND_LIBS="$BIND_LIBS --bind $GLU_FOUND:/usr/lib/x86_64-linux-gnu/$(basename "$GLU_FOUND")"
+fi
+
 # ============================================
 # Cleanup stale processes
 # ============================================

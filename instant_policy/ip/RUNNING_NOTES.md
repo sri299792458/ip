@@ -11,6 +11,24 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Container Dependency Fix (2026-02-08)
+
+### Decision
+Make `trimesh` an explicit dependency of both local and apptainer environments.
+
+### Changed
+- Added `trimesh==4.11.0` to `apptainer/instant_policy.def` pip install list.
+- Added `pyrender==0.1.45`, `pyopengl==3.1.0`, `pyglet==1.5.27`, `imageio`, `imageio-ffmpeg` to `apptainer/instant_policy.def`.
+- Added `trimesh==4.11.0` to `instant_policy/environment.yml` pip section.
+- `apptainer/run_instant_policy_vnc.sh` now auto-binds host `libGLU.so*` into the container if found.
+
+### Why
+- Pseudo-demo tooling (`ip.scripts.build_robotiq_mesh`) imports `trimesh`.
+- Host `pip list` can show `trimesh`, but runtime inside container uses its own env.
+
+### User-visible Effect
+- Rebuilt container images include `trimesh` and stop failing with `ModuleNotFoundError: trimesh`.
+
 ## Apptainer Path Defaults Cleanup (2026-02-08)
 
 ### Decision
