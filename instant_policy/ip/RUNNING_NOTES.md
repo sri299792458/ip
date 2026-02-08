@@ -1133,3 +1133,65 @@ Keep object size prior at `0.07..0.13 m` and fix gripper-object penetration via 
 - Unbounded nearest-object attach (no distance gate) can create unrealistic teleport-style grasping.
 - Pose noise/interpolation can place the gripper mesh slightly inside objects; projecting to a small positive clearance removes this artifact while keeping trajectories smooth.
 - Keeping corrected poses in saved demos avoids observation/pose mismatch.
+
+## Pseudo-Demo Depenetration Direction Fix (2026-02-08)
+
+### Decision
+Use signed-distance directionality for depenetration to avoid pushing deeper into objects when a sampled gripper point is already inside geometry.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`:
+  - closest-object query now uses mesh nearest + signed distance in object frame,
+  - inside-object points (`signed_distance > 0`) invert push direction (outward),
+  - per-step depenetration now selects the most violating object based on:
+    - penetration depth (if any), else
+    - clearance deficit to nearest surface.
+
+### Why
+- Unsigned nearest-distance alone cannot distinguish inside vs outside and can produce wrong push direction under penetration.
+- Signed-distance-based correction directly targets real intersection and prevents the “gripper sits inside object” failure mode.
+
+## Pseudo-Demo First-Principles Collision Projection (2026-02-08)
+
+### Decision
+Replace per-step push-out heuristics with collision-feasible trajectory projection along the commanded motion segment.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`:
+  - added signed-distance clearance metric (`_max_clearance_violation`),
+  - start pose sampling now prefers collision-free initial poses,
+  - replaced push-based depenetration with:
+    - SE(3) interpolation (`_interpolate_pose`),
+    - bisection line-search projection (`_project_pose_from_prev`) that finds the largest feasible `alpha` on `prev -> desired`,
+  - render loop now tracks `prev_pose` and projects each step before attach/render/save.
+  - this supersedes the prior local push-out depenetration path.
+
+### Why
+- This enforces a clean invariant: non-attached objects are not penetrated by accepted gripper poses.
+- It avoids direction/overshoot artifacts from local push vectors and is easier to reason about as a deterministic feasibility projection.
+
+## Pseudo-Demo Simplification: Frame Alignment over Collision Projection (2026-02-08)
+
+### Decision
+Return to a simpler paper-style generation loop (waypoints + attach/detach) and fix severe penetration at the source via gripper frame alignment.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`:
+  - removed collision-projection/depenetration path,
+  - kept simple event-based attach/detach with `attach_radius` gate,
+  - added gripper mesh frame canonicalization:
+    - translate loaded Robotiq mesh from URDF/base-link frame to policy-origin frame (`z=0.088 m`).
+- `ip/generation/config.py` and `ip/scripts/generate_pseudo_demos.py`:
+  - removed depenetration config/CLI fields.
+- `ip/generation/README.md`:
+  - updated to reflect simplified flow and tip-frame canonicalization.
+
+### Why
+- Paper Appendix D uses a simple kinematic process and explicitly does not enforce full kinematic feasibility.
+- Severe penetration observed in our outputs was primarily a frame-convention mismatch (URDF base-frame mesh vs grasp-centric waypoint sampling), not a need for a full collision solver.
+- Frame canonicalization preserves simple logic while removing the worst failure mode.
+
+### Convention Check
+- This aligns pseudo generation with deployment convention:
+  - robot flange/base frame -> policy origin offset is `0.088 m` along tool `+Z`.
+- Model gripper node template remains unchanged; only mesh used for attach/render proximity is re-referenced.

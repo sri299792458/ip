@@ -28,8 +28,6 @@ def build_config(args):
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
         attach_radius=args.attach_radius,
-        depenetration_clearance_m=args.depenetration_clearance_m,
-        depenetration_max_iters=args.depenetration_max_iters,
         gripper_mesh_path=args.gripper_mesh_path,
         seed=args.seed,
         save_renders=args.save_renders,
@@ -87,8 +85,6 @@ def main():
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
     parser.add_argument("--attach_radius", type=float, default=0.02)
-    parser.add_argument("--depenetration_clearance_m", type=float, default=0.003)
-    parser.add_argument("--depenetration_max_iters", type=int, default=4)
     parser.add_argument(
         "--gripper_mesh_path",
         type=str,

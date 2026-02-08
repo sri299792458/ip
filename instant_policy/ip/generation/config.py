@@ -71,8 +71,6 @@ class GenerationConfig:
 
     attach_on_grasp: bool = True
     attach_radius: float = 0.02
-    depenetration_clearance_m: float = 0.003
-    depenetration_max_iters: int = 4
     gripper_mesh_path: Optional[str] = None  # Required by generator for paper-fidelity runs.
 
     cameras: List[CameraConfig] = field(default_factory=default_cameras)

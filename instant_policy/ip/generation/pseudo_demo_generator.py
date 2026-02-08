@@ -28,6 +28,9 @@ from ip.utils.data_proc import sample_to_cond_demo, sample_to_live, save_sample
 class PseudoDemoGenerator:
     OPEN = 1
     CLOSED = 0
+    # Policy frame convention used in deployment/training:
+    # UR flange/base -> policy origin offset along +Z is ~88 mm.
+    POLICY_ORIGIN_Z_FROM_URDF_BASE_M = 0.088
 
     def __init__(self, config: GenerationConfig, scene_encoder=None):
         self.config = config
@@ -93,7 +96,34 @@ class PseudoDemoGenerator:
                 f"Gripper mesh extents look invalid for meter units: {ext.tolist()} from {path}. "
                 "Expected a metric Robotiq 2F-85 mesh."
             )
+        mesh = self._canonicalize_gripper_mesh_frame(mesh)
         return mesh
+
+    def _canonicalize_gripper_mesh_frame(self, mesh: trimesh.Trimesh):
+        """Map URDF/base-link mesh frame to the policy-origin frame.
+
+        Keep pseudo generation consistent with deployment/model conventions where
+        the policy origin is offset from flange/base by ~88 mm in +Z.
+        We center XY using the fingertip band to keep symmetry robust across mesh variants.
+        """
+        out = mesh.copy()
+        verts = np.asarray(out.vertices, dtype=np.float64)
+        if verts.shape[0] == 0:
+            return out
+        z = verts[:, 2]
+        z_thr = float(np.quantile(z, 0.98))
+        tip_band = verts[z >= z_thr]
+        if tip_band.shape[0] == 0:
+            tip_xy = np.array([0.0, 0.0], dtype=np.float64)
+        else:
+            tip_xy = np.mean(tip_band[:, :2], axis=0)
+        policy_origin = np.array(
+            [float(tip_xy[0]), float(tip_xy[1]), self.POLICY_ORIGIN_Z_FROM_URDF_BASE_M],
+            dtype=np.float64,
+        )
+        out.apply_translation(-policy_origin)
+        out.remove_unreferenced_vertices()
+        return out
 
     def _sample_start_pose(self, rng: np.random.Generator):
         bounds = self.config.gripper_bounds
@@ -122,42 +152,20 @@ class PseudoDemoGenerator:
         grip_pts = transform_points(self.gripper_surface_points, gripper_pose)
         best_idx = None
         best_dist = None
-        best_dir = None
         for idx, obj in enumerate(scene.objects):
             if ignore_idx is not None and idx == ignore_idx:
                 continue
-            obj_pts = transform_points(obj.surface_points, obj.pose)
-            diff = grip_pts[None, :, :] - obj_pts[:, None, :]
-            # Distance between two sampled surfaces (object and gripper mesh).
-            d_sq = np.einsum("ijk,ijk->ij", diff, diff)
-            flat_idx = int(np.argmin(d_sq))
-            obj_i, grip_i = np.unravel_index(flat_idx, d_sq.shape)
-            dist = float(np.sqrt(d_sq[obj_i, grip_i]))
+            T_o_w = np.linalg.inv(obj.pose)
+            grip_pts_o = transform_points(grip_pts, T_o_w)
+            _, d_unsigned, _ = trimesh.proximity.closest_point(obj.mesh, grip_pts_o)
+            closest_i = int(np.argmin(d_unsigned))
+            dist = float(d_unsigned[closest_i])
             if best_dist is None or dist < best_dist:
                 best_dist = dist
                 best_idx = idx
-                push = diff[obj_i, grip_i]
-                push_norm = float(np.linalg.norm(push))
-                if push_norm < 1e-8:
-                    push_dir = -gripper_pose[:3, 2]
-                else:
-                    push_dir = push / push_norm
-                best_dir = push_dir.astype(np.float32)
         if best_idx is None:
-            return None, None, None
-        return best_idx, best_dist, best_dir
-
-    def _depenetrate_pose(self, scene: Scene, pose: np.ndarray, ignore_idx: Optional[int] = None):
-        clearance = float(self.config.depenetration_clearance_m)
-        if clearance <= 0.0:
-            return pose
-        corrected = np.array(pose, copy=True)
-        for _ in range(int(self.config.depenetration_max_iters)):
-            _, dist, push_dir = self._closest_object(scene, corrected, ignore_idx=ignore_idx)
-            if dist is None or push_dir is None or dist >= clearance:
-                break
-            corrected[:3, 3] += push_dir * (clearance - dist + 1e-4)
-        return corrected
+            return None, None
+        return best_idx, best_dist
 
     def _render_trajectory(self, scene: Scene, traj: List[Waypoint]):
         pcds = []
@@ -172,13 +180,13 @@ class PseudoDemoGenerator:
             visual_idx = 0
         for w in traj:
             grip = int(w.gripper_state)
-            pose = self._depenetrate_pose(scene, w.pose, ignore_idx=attached_idx)
+            pose = w.pose
             if last_grip is None:
                 last_grip = grip
             elif grip != last_grip:
                 # Paper Appendix D: attach/detach when gripper state changes.
                 if grip == self.CLOSED and last_grip == self.OPEN and self.config.attach_on_grasp:
-                    obj_idx, best_dist, _ = self._closest_object(scene, pose)
+                    obj_idx, best_dist = self._closest_object(scene, pose)
                     if obj_idx is not None and best_dist is not None and best_dist <= self.config.attach_radius:
                         obj = scene.objects[obj_idx]
                         attached_idx = obj_idx

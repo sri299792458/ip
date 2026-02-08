@@ -38,7 +38,7 @@ These are the defaults we treat as paper-canonical for pseudo generation:
 - Robotiq 2F-85 mesh required (`--gripper_mesh_path`)
 - attach on open->closed and detach on closed->open
 - contact-gated attach radius (`attach_radius=0.02 m`)
-- de-penetration projection (`depenetration_clearance_m=0.003`, `depenetration_max_iters=4`)
+- gripper mesh frame canonicalization to policy-origin frame (`z=0.088 m` from URDF base/flange frame)
 - three depth cameras rendered via PyRender
 
 Reference files:
@@ -79,10 +79,9 @@ Use `trajectory` for large-scale continuous generation.
 2. Sample pseudo-task waypoint specs (object-relative).
 3. Generate multiple demos per task by varying start pose and scene perturbation.
 4. Interpolate and resample trajectory at fixed spacing.
-5. Project gripper pose out of object penetration (small clearance).
-6. Attach/detach closest object on gripper state transitions only when within contact radius.
-7. Render object point clouds from depth cameras.
-8. Store in chosen format (`steps` or `trajectory`).
+5. Attach/detach closest object on gripper state transitions only when within contact radius.
+6. Render object point clouds from depth cameras.
+7. Store in chosen format (`steps` or `trajectory`).
 
 ## Gripper Mesh Policy
 
@@ -90,10 +89,10 @@ Use `trajectory` for large-scale continuous generation.
 - Use `build_robotiq_mesh` to create a metric Robotiq 2F-85 mesh.
 - We use a fixed jaw state mesh (usually `open`) for proximity checks.
 - This is sufficient for paper-style pseudo-data; full finger articulation simulation is not required.
+- Loaded mesh is translated to the policy-origin frame so waypoint/contact sampling matches the same convention used by deployment/model inputs (`flange/base -> policy-origin = 0.088 m`).
 - Contact is event-based:
   - close transition attaches nearest object only if distance <= `attach_radius`.
   - open transition detaches.
-- A small de-penetration projection keeps the gripper outside object surfaces before each rendered step.
 
 ## Commands
 
@@ -168,7 +167,7 @@ If RGB renders look static, this can still be correct:
 - Headless render failure: set `PYOPENGL_PLATFORM=egl`.
 - Storage explosion: use `trajectory` mode + ring buffer.
 - Unexpected no-motion visuals: verify gripper state transitions and attachment behavior.
-- If the gripper appears to pass through objects: lower `attach_radius` and/or raise `depenetration_clearance_m` slightly.
+- If the gripper appears to pass through objects frequently: verify mesh frame canonicalization and that `attach_radius` is not too large for your object scale prior.
 
 ## Dependencies
 
