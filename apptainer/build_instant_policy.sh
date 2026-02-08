@@ -10,7 +10,11 @@
 # Output: instant_policy.sif (~8-10 GB)
 #
 
-set -e  # Exit on error
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+DEF_FILE="$SCRIPT_DIR/instant_policy.def"
 
 echo "================================"
 echo "Instant Policy Container Builder"
@@ -37,23 +41,24 @@ fi
 mkdir -p "$APPTAINER_CACHEDIR"
 mkdir -p "$APPTAINER_TMPDIR"
 
-# Output location in scratch
-OUTPUT_DIR="/scratch.global/$USER/ips"
+# Output location in scratch (override with OUTPUT_DIR if needed)
+OUTPUT_DIR="${OUTPUT_DIR:-/scratch.global/$USER/ips}"
+if [[ "$OUTPUT_DIR" != /* ]]; then
+    OUTPUT_DIR="$REPO_ROOT/$OUTPUT_DIR"
+fi
 mkdir -p "$OUTPUT_DIR"
-
-# Get the directory where this script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd -P)"
 
 # Check if definition file exists
-if [ ! -f "instant_policy.def" ]; then
+if [ ! -f "$DEF_FILE" ]; then
     echo "ERROR: instant_policy.def not found in $SCRIPT_DIR"
     exit 1
 fi
 
 echo ""
 echo "Build configuration:"
-echo "  Definition file: instant_policy.def"
+echo "  Repo root: $REPO_ROOT"
+echo "  Definition file: $DEF_FILE"
 echo "  Output file: $OUTPUT_DIR/instant_policy.sif"
 echo "  Cache directory: $APPTAINER_CACHEDIR"
 echo "  Temp directory: $APPTAINER_TMPDIR"
@@ -64,10 +69,10 @@ echo ""
 
 # Build the container with --fakeroot (no root privileges needed)
 # --force overwrites existing .sif file
-apptainer build --fakeroot --force "$OUTPUT_DIR/instant_policy.sif" instant_policy.def
+apptainer build --fakeroot --force "$OUTPUT_DIR/instant_policy.sif" "$DEF_FILE"
 
 # Create symlink in current directory for convenience
-ln -sf "$OUTPUT_DIR/instant_policy.sif" instant_policy.sif
+ln -sf "$OUTPUT_DIR/instant_policy.sif" "$SCRIPT_DIR/instant_policy.sif"
 
 echo ""
 echo "================================"
@@ -76,7 +81,7 @@ echo "================================"
 echo ""
 echo "Container image: $OUTPUT_DIR/instant_policy.sif"
 echo "Symlink created: $SCRIPT_DIR/instant_policy.sif -> $OUTPUT_DIR/instant_policy.sif"
-echo "Size: $(du -h $OUTPUT_DIR/instant_policy.sif | cut -f1)"
+echo "Size: $(du -h "$OUTPUT_DIR/instant_policy.sif" | cut -f1)"
 echo ""
 echo "Next steps:"
 echo "  1. Review run_instant_policy_vnc.sh and adjust paths if needed"

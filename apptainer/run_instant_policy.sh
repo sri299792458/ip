@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export RLBENCH_ENABLE_VNC=0
 
 exec "$SCRIPT_DIR/run_instant_policy_vnc.sh" "$@"

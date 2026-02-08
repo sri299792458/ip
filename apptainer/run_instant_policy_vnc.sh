@@ -6,22 +6,46 @@
 # Example: ./run_instant_policy_vnc.sh python eval.py --task_name=reach_target --num_demos=2
 #
 
-set -e
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="${PROJECT_DIR:-$HOME/ips}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+PROJECT_DIR="${PROJECT_DIR:-$REPO_ROOT}"
 INSTANT_POLICY_DIR="${INSTANT_POLICY_DIR:-$PROJECT_DIR/instant_policy}"
 DATA_DIR="${DATA_DIR:-/scratch.global/$USER/ips}"
-CONTAINER_IMAGE="$SCRIPT_DIR/instant_policy.sif"
+CONTAINER_IMAGE="${CONTAINER_IMAGE:-$SCRIPT_DIR/instant_policy.sif}"
 DISPLAY_NUM="${RLBENCH_DISPLAY:-1}"
 VNC_PORT="${RLBENCH_VNC_PORT:-5900}"
 ENABLE_VNC="${RLBENCH_ENABLE_VNC:-1}"
 
+# Canonicalize user-provided paths to avoid cwd-dependent behavior.
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo "ERROR: project dir not found: $PROJECT_DIR"
+    exit 1
+fi
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)"
+
+if [[ "$INSTANT_POLICY_DIR" != /* ]]; then
+    INSTANT_POLICY_DIR="$PROJECT_DIR/$INSTANT_POLICY_DIR"
+fi
+if [ ! -d "$INSTANT_POLICY_DIR" ]; then
+    echo "ERROR: instant_policy dir not found: $INSTANT_POLICY_DIR"
+    exit 1
+fi
+INSTANT_POLICY_DIR="$(cd "$INSTANT_POLICY_DIR" && pwd -P)"
+
+if [[ "$DATA_DIR" != /* ]]; then
+    DATA_DIR="$PROJECT_DIR/$DATA_DIR"
+fi
+mkdir -p "$DATA_DIR/checkpoints"
+DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
+
+if [[ "$CONTAINER_IMAGE" != /* ]]; then
+    CONTAINER_IMAGE="$SCRIPT_DIR/$CONTAINER_IMAGE"
+fi
+
 # Validation
 [ ! -f "$CONTAINER_IMAGE" ] && echo "ERROR: Container not found: $CONTAINER_IMAGE" && exit 1
-[ ! -d "$INSTANT_POLICY_DIR" ] && echo "ERROR: instant_policy not found: $INSTANT_POLICY_DIR" && exit 1
-
-mkdir -p "$DATA_DIR/checkpoints"
 
 # ============================================
 # Library bindings (Rocky Linux -> Ubuntu)
@@ -32,7 +56,7 @@ NVIDIA_LIB_DIR="/usr/lib64"
 BIND_LIBS=""
 for lib in libGLX_nvidia.so libEGL_nvidia.so libnvidia-glcore.so libnvidia-tls.so \
            libnvidia-glsi.so libGLdispatch.so libOpenGL.so libGLX.so libEGL.so; do
-    found=$(find $NVIDIA_LIB_DIR -name "${lib}*" 2>/dev/null | head -1)
+    found=$(find "$NVIDIA_LIB_DIR" -name "${lib}*" 2>/dev/null | head -1)
     [ -n "$found" ] && BIND_LIBS="$BIND_LIBS --bind $found:/usr/lib/x86_64-linux-gnu/$(basename $found)"
 done
 

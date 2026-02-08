@@ -5,7 +5,7 @@ Apptainer container for running Instant Policy + RLBench on MSI (with optional V
 ## Build
 
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 ./build_instant_policy.sh
 ```
 
@@ -16,7 +16,7 @@ This creates `instant_policy.sif` (symlinked from `/scratch.global/$USER/ips`).
 Request a GPU node first, then:
 
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 ./run_instant_policy_vnc.sh python eval.py --task_name=plate_out --num_demos=2 --num_rollouts=10
 ```
 
@@ -33,7 +33,7 @@ Then open a VNC viewer to `localhost:5900`.
 For training jobs where you do not need interactive GUI streaming:
 
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 ./run_instant_policy.sh python train_language.py --help
 ```
 
@@ -44,7 +44,7 @@ fixed-size task buffer and train from `task_*.pt`.
 
 1) Fill the sharded ring buffer once:
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 sbatch generate_pseudo_buffer.slurm
 ```
 
@@ -55,19 +55,19 @@ Default behavior:
 
 2) Start continuous overwrite generation (after initial fill):
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 sbatch --export=ALL,FILL_BUFFER=0,APPEND=1 generate_pseudo_buffer.slurm
 ```
 
 3) Build a fixed validation pseudo set:
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 sbatch generate_pseudo_val.slurm
 ```
 
 4) Train policy on trajectory data:
 ```bash
-cd ~/ips/apptainer
+cd ~/ip/apptainer
 sbatch train_instant_policy.slurm
 ```
 
@@ -99,7 +99,7 @@ This avoids Bullet segfaults caused by path or library mismatches.
 
 ## Environment Variables
 
-- `PROJECT_DIR` (default: `$HOME/ips`)
+- `PROJECT_DIR` (default: repo root containing this `apptainer/` folder)
 - `INSTANT_POLICY_DIR` (default: `$PROJECT_DIR/instant_policy`)
 - `DATA_DIR` (default: `/scratch.global/$USER/ips`)
 - `RLBENCH_DISPLAY` (default: `:1`)

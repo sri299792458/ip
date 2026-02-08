@@ -11,6 +11,32 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Apptainer Path Defaults Cleanup (2026-02-08)
+
+### Decision
+Stop relying on `$HOME/ips` and manual shell exports for runner path resolution.
+
+### Changed
+- `apptainer/run_instant_policy_vnc.sh`
+  - default `PROJECT_DIR` now resolves from script location (`repo_root = apptainer/..`).
+  - `INSTANT_POLICY_DIR` keeps defaulting to `$PROJECT_DIR/instant_policy`.
+  - canonicalizes `PROJECT_DIR`, `INSTANT_POLICY_DIR`, `DATA_DIR`, and `CONTAINER_IMAGE` to absolute paths.
+  - upgraded shell strict mode to `set -euo pipefail`.
+- `apptainer/README_instant_policy.md`
+  - commands updated to `~/ip/apptainer`.
+  - env var docs updated to reflect repo-relative default for `PROJECT_DIR`.
+- `apptainer/build_instant_policy.sh`
+  - canonicalizes script/repo/output/definition-file paths and uses absolute definition path for build.
+  - supports `OUTPUT_DIR` override while keeping deterministic default behavior.
+
+### Why
+- Hardcoded home-folder naming is brittle across clones (`~/ips` vs `~/ip`).
+- Relative-path/cwd assumptions in shell scripts are brittle and hard to debug.
+- Repo-relative defaults plus canonical absolute paths remove per-shell setup friction.
+
+### User-visible Effect
+- Running `apptainer/run_instant_policy*.sh` works without exporting `PROJECT_DIR`/`INSTANT_POLICY_DIR` in typical repo layouts.
+
 ## Generation Docs Consolidation (2026-02-08)
 
 ### Decision
