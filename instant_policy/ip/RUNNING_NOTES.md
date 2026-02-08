@@ -1184,7 +1184,7 @@ Return to a simpler paper-style generation loop (waypoints + attach/detach) and 
 - `ip/generation/config.py` and `ip/scripts/generate_pseudo_demos.py`:
   - removed depenetration config/CLI fields.
 - `ip/generation/README.md`:
-  - updated to reflect simplified flow and tip-frame canonicalization.
+  - updated to reflect simplified flow and policy-origin frame canonicalization.
 
 ### Why
 - Paper Appendix D uses a simple kinematic process and explicitly does not enforce full kinematic feasibility.
@@ -1195,3 +1195,20 @@ Return to a simpler paper-style generation loop (waypoints + attach/detach) and 
 - This aligns pseudo generation with deployment convention:
   - robot flange/base frame -> policy origin offset is `0.088 m` along tool `+Z`.
 - Model gripper node template remains unchanged; only mesh used for attach/render proximity is re-referenced.
+
+## Pseudo-Demo Simplification: Remove `rtree` Requirement (2026-02-08)
+
+### Decision
+Keep closest-object matching simple and dependency-light by using sampled surface-point distances only.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`:
+  - `_closest_object` no longer calls `trimesh.proximity.closest_point`,
+  - uses pairwise distance between transformed object sampled points and gripper sampled points.
+- Removed `rtree==1.3.0` from:
+  - `apptainer/instant_policy.def`
+  - `instant_policy/environment.yml`
+
+### Why
+- This restores the simple kinematic pseudo-data path without requiring spatial-index dependencies.
+- Avoids environment fragility across nodes while preserving the intended closest-object attach behavior.

@@ -155,11 +155,10 @@ class PseudoDemoGenerator:
         for idx, obj in enumerate(scene.objects):
             if ignore_idx is not None and idx == ignore_idx:
                 continue
-            T_o_w = np.linalg.inv(obj.pose)
-            grip_pts_o = transform_points(grip_pts, T_o_w)
-            _, d_unsigned, _ = trimesh.proximity.closest_point(obj.mesh, grip_pts_o)
-            closest_i = int(np.argmin(d_unsigned))
-            dist = float(d_unsigned[closest_i])
+            obj_pts = transform_points(obj.surface_points, obj.pose)
+            diff = obj_pts[:, None, :] - grip_pts[None, :, :]
+            d_sq = np.einsum("ijk,ijk->ij", diff, diff)
+            dist = float(np.sqrt(np.min(d_sq)))
             if best_dist is None or dist < best_dist:
                 best_dist = dist
                 best_idx = idx
