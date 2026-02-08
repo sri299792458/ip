@@ -63,14 +63,19 @@ done
 [ -d "/usr/share/vulkan/icd.d" ] && BIND_LIBS="$BIND_LIBS --bind /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d"
 
 # pyrender/pyglet may require libGLU, which is not always present in the image.
-GLU_FOUND=""
+# Bind common soname variants explicitly so ctypes lookup for "GLU" succeeds.
+GLU_DIR=""
 for d in /usr/lib64 /usr/lib/x86_64-linux-gnu /lib64 /lib/x86_64-linux-gnu; do
-    if [ -z "$GLU_FOUND" ] && [ -d "$d" ]; then
-        GLU_FOUND=$(find "$d" -maxdepth 1 -name 'libGLU.so*' 2>/dev/null | head -1 || true)
+    if [ -z "$GLU_DIR" ] && [ -d "$d" ] && find "$d" -maxdepth 1 -name 'libGLU.so*' | grep -q .; then
+        GLU_DIR="$d"
     fi
 done
-if [ -n "$GLU_FOUND" ]; then
-    BIND_LIBS="$BIND_LIBS --bind $GLU_FOUND:/usr/lib/x86_64-linux-gnu/$(basename "$GLU_FOUND")"
+if [ -n "$GLU_DIR" ]; then
+    for glu in libGLU.so libGLU.so.1 libGLU.so.1.3.1; do
+        if [ -f "$GLU_DIR/$glu" ]; then
+            BIND_LIBS="$BIND_LIBS --bind $GLU_DIR/$glu:/usr/lib/x86_64-linux-gnu/$glu"
+        fi
+    done
 fi
 
 # ============================================
