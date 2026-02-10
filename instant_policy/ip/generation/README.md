@@ -202,6 +202,7 @@ If RGB renders look static, this can still be correct:
 - Storage explosion: use `trajectory` mode + ring buffer.
 - Unexpected no-motion visuals: verify gripper state transitions and attachment behavior.
 - If the gripper appears to pass through objects frequently: verify mesh frame canonicalization and that `attach_radius` is not too large for your object scale prior.
+- To reproduce legacy spherical interpolation behavior for debugging, use `--disable_spherical_guardrails`.
 
 ## Dependencies
 

@@ -7,14 +7,29 @@ from ip.generation.waypoint_sampler import Waypoint
 
 
 class TrajectoryInterpolator:
-    def __init__(self, trans_spacing: float, rot_spacing_deg: float):
+    def __init__(
+        self,
+        trans_spacing: float,
+        rot_spacing_deg: float,
+        use_spherical_guardrails: bool = True,
+    ):
         self.trans_spacing = float(trans_spacing)
         self.rot_spacing = np.deg2rad(rot_spacing_deg)
+        self.use_spherical_guardrails = bool(use_spherical_guardrails)
 
     def _slerp_vectors(self, v0, v1, t):
         v0 = v0 / (np.linalg.norm(v0) + 1e-8)
         v1 = v1 / (np.linalg.norm(v1) + 1e-8)
         dot = np.clip(np.dot(v0, v1), -1.0, 1.0)
+        if not self.use_spherical_guardrails:
+            if dot > 0.9995:
+                v = (1.0 - t) * v0 + t * v1
+                return v / (np.linalg.norm(v) + 1e-8)
+            theta = np.arccos(dot)
+            sin_t = np.sin(theta)
+            w0 = np.sin((1.0 - t) * theta) / sin_t
+            w1 = np.sin(t * theta) / sin_t
+            return w0 * v0 + w1 * v1
         # Near-identical direction: linear blend is stable.
         if dot > 0.9995:
             v = (1.0 - t) * v0 + t * v1
@@ -56,7 +71,7 @@ class TrajectoryInterpolator:
             u = self._slerp_vectors(v0, v1, t)
             r = (1.0 - t) * np.linalg.norm(v0) + t * np.linalg.norm(v1)
             out = center + r * u
-            if not np.all(np.isfinite(out)):
+            if self.use_spherical_guardrails and not np.all(np.isfinite(out)):
                 return (1.0 - t) * p0 + t * p1
             return out
         return (1.0 - t) * p0 + t * p1

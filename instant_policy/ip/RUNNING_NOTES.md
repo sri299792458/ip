@@ -173,6 +173,45 @@ Use separate mesh caches for observation and visual offscreen renderers.
 ### User-visible Effect
 - High-quality video rendering works with dual-renderer setup without crashing.
 
+## Spherical Interpolation Re-Enabled for A/B (2026-02-10)
+
+### Decision
+Re-enable spherical interpolation in default method sampling to test whether prior long-stall behavior correlates with interpolation mode.
+
+### Changed
+- `ip/generation/config.py`
+  - `interpolation_methods` set back to `("linear", "cubic", "spherical")`.
+- Kept numerical guardrails in `trajectory_interpolator.py`.
+
+### Why
+- Needed a controlled check requested by user while avoiding silent non-finite pose failures.
+
+### User-visible Effect
+- Pseudo generation can sample spherical trajectories again for direct behavior comparison.
+
+## Spherical Guardrails Toggle for Repro (2026-02-10)
+
+### Decision
+Add an explicit CLI switch to disable spherical interpolation guardrails for controlled reproduction testing.
+
+### Changed
+- `ip/scripts/generate_pseudo_demos.py`
+  - added `--disable_spherical_guardrails` (debug-only).
+- `ip/generation/config.py`
+  - added `use_spherical_guardrails` config field (default `True`).
+- `ip/generation/pseudo_demo_generator.py`
+  - passes guardrail setting into trajectory interpolator.
+- `ip/generation/trajectory_interpolator.py`
+  - supports both guarded and legacy-unchecked spherical path math.
+- `ip/generation/README.md`
+  - documents debug flag.
+
+### Why
+- Needed to reproduce prior long-stall behavior without repeatedly editing source.
+
+### User-visible Effect
+- You can run safe default mode and legacy spherical mode with a single CLI switch.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision

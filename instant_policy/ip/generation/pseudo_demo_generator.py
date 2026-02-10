@@ -56,6 +56,7 @@ class PseudoDemoGenerator:
         self.interpolator = TrajectoryInterpolator(
             trans_spacing=config.trans_spacing,
             rot_spacing_deg=config.rot_spacing_deg,
+            use_spherical_guardrails=config.use_spherical_guardrails,
         )
         self.augmenter = TrajectoryAugmenter(
             disturbance_prob=config.disturbance_prob,

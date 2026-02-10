@@ -102,9 +102,10 @@ class GenerationConfig:
 
     trans_spacing: float = 0.01
     rot_spacing_deg: float = 3.0
-    # Keep defaults on stable interpolation paths; spherical can be enabled
-    # explicitly but is not default due occasional numerical degeneracy.
-    interpolation_methods: Tuple[str, ...] = ("linear", "cubic")
+    # Include spherical interpolation for A/B testing of motion style.
+    # Numerical guardrails in the interpolator keep this stable.
+    interpolation_methods: Tuple[str, ...] = ("linear", "cubic", "spherical")
+    use_spherical_guardrails: bool = True
 
     disturbance_prob: float = 0.3
     gripper_noise_prob: float = 0.1  # Per-timestep flip probability.
