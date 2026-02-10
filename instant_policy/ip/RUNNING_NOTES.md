@@ -129,6 +129,30 @@ Harden trajectory interpolation against spherical-degeneracy cases and keep defa
 ### User-visible Effect
 - Random-skill by-task generation is more stable and avoids silent long stalls from invalid interpolation states.
 
+## Video-Only Quality Increase (2026-02-10)
+
+### Decision
+Increase pseudo-debug video quality without affecting training observations.
+
+### Changed
+- `ip/generation/config.py`
+  - added `render_visual_width=640` and `render_visual_height=640`.
+- `ip/generation/renderer.py`
+  - split renderers into:
+    - observation renderer (uses camera config resolution, RLBench-aligned 128x128)
+    - visual renderer (uses high-res output for debug videos)
+  - scales intrinsics for visual rendering to preserve the same FOV.
+- `ip/generation/pseudo_demo_generator.py`
+  - wires visual render size config into `DepthRenderer`.
+- `ip/generation/README.md`
+  - documents that video quality is higher while training observations remain unchanged.
+
+### Why
+- Higher quality debug videos improve visual inspection, while training should keep RLBench-aligned observation statistics.
+
+### User-visible Effect
+- Rendered videos are sharper, but point-cloud observations used for training are unchanged.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision

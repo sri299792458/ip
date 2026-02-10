@@ -124,6 +124,8 @@ class GenerationConfig:
     render_dir: Optional[str] = None
     render_stride: int = 1
     render_visual_camera: int = 0
+    render_visual_width: int = 640
+    render_visual_height: int = 640
     render_save_depth: bool = False
     render_make_videos: bool = False
     render_video_dir: Optional[str] = None

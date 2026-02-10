@@ -15,13 +15,18 @@ class DepthRenderer:
         downsample_voxel: Optional[float] = None,
         max_points_per_obs: Optional[int] = None,
         gripper_mesh: Optional[trimesh.Trimesh] = None,
+        visual_width: Optional[int] = None,
+        visual_height: Optional[int] = None,
     ):
         if not cameras:
             raise ValueError("At least one camera config is required.")
         self.cameras = cameras
         self.downsample_voxel = downsample_voxel
         self.max_points_per_obs = max_points_per_obs
-        self.renderer = pyrender.OffscreenRenderer(cameras[0].width, cameras[0].height)
+        self.obs_renderer = pyrender.OffscreenRenderer(cameras[0].width, cameras[0].height)
+        self.visual_width = int(visual_width) if visual_width is not None else int(cameras[0].width)
+        self.visual_height = int(visual_height) if visual_height is not None else int(cameras[0].height)
+        self.visual_renderer = pyrender.OffscreenRenderer(self.visual_width, self.visual_height)
         self.mesh_cache: Dict[int, pyrender.Mesh] = {}
         if gripper_mesh is None:
             gripper_mesh = trimesh.creation.icosphere(radius=0.015)
@@ -74,7 +79,7 @@ class DepthRenderer:
                 fx=cam.fx, fy=cam.fy, cx=cam.cx, cy=cam.cy, znear=cam.z_near, zfar=cam.z_far
             )
             cam_node = pyr_scene.add(camera, pose=cam.pose)
-            color, depth = self.renderer.render(pyr_scene)
+            color, depth = self.obs_renderer.render(pyr_scene)
             pyr_scene.remove_node(cam_node)
             pcd = self._depth_to_pointcloud(depth, cam)
             if pcd.size > 0:
@@ -108,10 +113,17 @@ class DepthRenderer:
         light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
         pyr_scene.add(light, pose=np.eye(4))
         cam = self.cameras[visual_idx]
+        sx = float(self.visual_width) / float(cam.width)
+        sy = float(self.visual_height) / float(cam.height)
         camera = pyrender.IntrinsicsCamera(
-            fx=cam.fx, fy=cam.fy, cx=cam.cx, cy=cam.cy, znear=cam.z_near, zfar=cam.z_far
+            fx=cam.fx * sx,
+            fy=cam.fy * sy,
+            cx=cam.cx * sx,
+            cy=cam.cy * sy,
+            znear=cam.z_near,
+            zfar=cam.z_far,
         )
         cam_node = pyr_scene.add(camera, pose=cam.pose)
-        color, depth = self.renderer.render(pyr_scene)
+        color, depth = self.visual_renderer.render(pyr_scene)
         pyr_scene.remove_node(cam_node)
         return color, depth

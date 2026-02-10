@@ -68,6 +68,8 @@ class PseudoDemoGenerator:
             downsample_voxel=config.render_downsample_voxel,
             max_points_per_obs=config.max_points_per_obs,
             gripper_mesh=self.gripper_mesh,
+            visual_width=config.render_visual_width,
+            visual_height=config.render_visual_height,
         )
 
     def _load_gripper_mesh(self) -> trimesh.Trimesh:
