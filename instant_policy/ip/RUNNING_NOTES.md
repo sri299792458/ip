@@ -11,6 +11,43 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Attach-Gate Tuning Metrics Upgrade (2026-02-10)
+
+### Decision
+Upgrade attach-gate sweep metrics to penalize ambiguous/wrong-object attachment candidates, not only target-attach recall.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`
+  - added attach diagnostics:
+    - `target_close_with_other_eligible`
+    - `target_close_other_eligible_count_sum`
+    - `hard_negative_other_eligible`
+    - `hard_negative_other_eligible_count_sum`
+  - hard-negative probe generation now supports object-scale offsets:
+    - `offset = clip(scale * object_extent, min_m, max_m)`
+  - retained optional fixed-offset probe mode.
+- `ip/scripts/tune_attach_gates.py`
+  - added new summary metrics:
+    - `wrong_object_candidate_rate`
+    - `hard_negative_other_eligible_rate`
+    - mean eligible-count diagnostics
+  - updated ranking score to include penalties for ambiguous/wrong-object eligibility.
+  - added CLI args:
+    - `--hard_negative_offset_scale`
+    - `--hard_negative_offset_min_m`
+    - `--hard_negative_offset_max_m`
+    - optional override `--hard_negative_offset_m`
+- `ip/generation/README.md`
+  - updated tuning command to use object-scale hard-negative defaults.
+  - documented fixed-offset override and new ranking intent.
+
+### Why
+- Previous tuning could overfit easy positives and report near-perfect recall without exposing permissive/wrong-object behavior.
+- Object-scale probing makes hard negatives comparable across small and large meshes.
+
+### User-visible Effect
+- Sweep outputs are now more diagnostic and provide a clearer basis for selecting `attach_radius` and `attach_capture_min_points`.
+
 ## RLBench Runtime Camera Dump Utility (2026-02-10)
 
 ### Decision

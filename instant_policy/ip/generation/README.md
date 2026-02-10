@@ -167,10 +167,17 @@ python -m ip.scripts.tune_attach_gates \
   --num_demos_per_task 2 \
   --attach_radius_grid 0.015 0.020 0.025 0.030 \
   --attach_capture_min_points_grid 1 3 5 \
-  --hard_negative_offset_m 0.06 \
+  --hard_negative_offset_scale 0.35 \
+  --hard_negative_offset_min_m 0.04 \
+  --hard_negative_offset_max_m 0.12 \
   --out_json /scratch/.../pseudo_debug/attach_tuning.json \
   --out_csv /scratch/.../pseudo_debug/attach_tuning.csv
 ```
+
+Notes:
+- By default, hard-negative probes use object-scale offsets (`scale * object_extent`, clamped by min/max).
+- Use `--hard_negative_offset_m` only when you explicitly want a fixed offset across all object sizes.
+- Ranking now penalizes ambiguous/wrong-object eligibility, not just target attach recall.
 
 Render one video per task category (debug):
 

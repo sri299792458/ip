@@ -258,6 +258,10 @@ class PseudoDemoGenerator:
             "cap_sum_failed_target": 0.0,
             "hard_negative_probes": 0.0,
             "hard_negative_false_attach": 0.0,
+            "target_close_with_other_eligible": 0.0,
+            "target_close_other_eligible_count_sum": 0.0,
+            "hard_negative_other_eligible": 0.0,
+            "hard_negative_other_eligible_count_sum": 0.0,
         }
 
     @staticmethod
@@ -274,6 +278,9 @@ class PseudoDemoGenerator:
         collect_attach_stats: bool = False,
         skip_render: bool = False,
         hard_negative_local_offsets: Optional[np.ndarray] = None,
+        hard_negative_offset_scale: Optional[float] = None,
+        hard_negative_offset_min_m: float = 0.04,
+        hard_negative_offset_max_m: float = 0.12,
     ):
         pcds = []
         adjusted_traj = []
@@ -316,25 +323,71 @@ class PseudoDemoGenerator:
                     # First-principles object-centric behavior:
                     # if this waypoint targets an object, attach only that object.
                     if targeted:
+                        target_idx = int(w.obj_index)
+                        if target_idx < 0 or target_idx >= len(scene.objects):
+                            target_idx = -1
+                        if attach_stats is not None and target_idx >= 0:
+                            other_eligible_count = 0
+                            for cand_idx in range(len(scene.objects)):
+                                if cand_idx == target_idx:
+                                    continue
+                                d_cand, cap_cand = self._object_attach_metrics(scene, pose, cand_idx)
+                                if self._should_attach(d_cand, cap_cand):
+                                    other_eligible_count += 1
+                            attach_stats["target_close_other_eligible_count_sum"] += float(other_eligible_count)
+                            if other_eligible_count > 0:
+                                attach_stats["target_close_with_other_eligible"] += 1.0
                         if (
                             attach_stats is not None
-                            and hard_negative_local_offsets is not None
-                            and int(w.obj_index) >= 0
+                            and target_idx >= 0
+                            and (hard_negative_local_offsets is not None or hard_negative_offset_scale is not None)
                         ):
-                            for offs_local in np.asarray(hard_negative_local_offsets, dtype=np.float64).reshape(-1, 3):
+                            if hard_negative_local_offsets is not None:
+                                offsets = np.asarray(hard_negative_local_offsets, dtype=np.float64).reshape(-1, 3)
+                            else:
+                                obj_extent = float(np.max(scene.objects[target_idx].mesh.extents))
+                                d = float(np.clip(
+                                    float(hard_negative_offset_scale) * obj_extent,
+                                    float(hard_negative_offset_min_m),
+                                    float(hard_negative_offset_max_m),
+                                ))
+                                offsets = np.array(
+                                    [
+                                        [d, 0.0, 0.0],
+                                        [-d, 0.0, 0.0],
+                                        [0.0, d, 0.0],
+                                        [0.0, -d, 0.0],
+                                        [0.0, 0.0, d],
+                                        [0.0, 0.0, -d],
+                                    ],
+                                    dtype=np.float64,
+                                )
+                            for offs_local in offsets:
                                 pose_probe = np.array(pose, copy=True)
                                 pose_probe[:3, 3] += pose[:3, :3] @ offs_local
                                 d_probe, cap_probe = self._object_attach_metrics(
-                                    scene, pose_probe, int(w.obj_index)
+                                    scene, pose_probe, target_idx
                                 )
                                 attach_stats["hard_negative_probes"] += 1.0
                                 if self._should_attach(d_probe, cap_probe):
                                     attach_stats["hard_negative_false_attach"] += 1.0
-                        d, cap_count = self._object_attach_metrics(scene, pose, int(w.obj_index))
+                                other_eligible_probe = 0
+                                for cand_idx in range(len(scene.objects)):
+                                    if cand_idx == target_idx:
+                                        continue
+                                    d_cand_probe, cap_cand_probe = self._object_attach_metrics(
+                                        scene, pose_probe, cand_idx
+                                    )
+                                    if self._should_attach(d_cand_probe, cap_cand_probe):
+                                        other_eligible_probe += 1
+                                attach_stats["hard_negative_other_eligible_count_sum"] += float(other_eligible_probe)
+                                if other_eligible_probe > 0:
+                                    attach_stats["hard_negative_other_eligible"] += 1.0
+                        d, cap_count = self._object_attach_metrics(scene, pose, target_idx)
                         attach_dist = d
                         attach_cap_count = int(cap_count)
                         if self._should_attach(d, cap_count):
-                            obj_idx = int(w.obj_index)
+                            obj_idx = target_idx
                     else:
                         # For non-object-centric waypoints, choose the best attach candidate:
                         # prioritize jaw-capture support, then nearest distance.
@@ -464,6 +517,9 @@ class PseudoDemoGenerator:
         waypoint_specs,
         rng: np.random.Generator,
         hard_negative_local_offsets: Optional[np.ndarray] = None,
+        hard_negative_offset_scale: Optional[float] = None,
+        hard_negative_offset_min_m: float = 0.04,
+        hard_negative_offset_max_m: float = 0.12,
     ):
         scene, traj = self._build_demo_trajectory(base_scene, waypoint_specs, rng)
         _, _, attach_stats = self._render_trajectory(
@@ -472,6 +528,9 @@ class PseudoDemoGenerator:
             collect_attach_stats=True,
             skip_render=True,
             hard_negative_local_offsets=hard_negative_local_offsets,
+            hard_negative_offset_scale=hard_negative_offset_scale,
+            hard_negative_offset_min_m=hard_negative_offset_min_m,
+            hard_negative_offset_max_m=hard_negative_offset_max_m,
         )
         return attach_stats
 
@@ -479,6 +538,9 @@ class PseudoDemoGenerator:
         self,
         rng: np.random.Generator,
         hard_negative_local_offsets: Optional[np.ndarray] = None,
+        hard_negative_offset_scale: Optional[float] = None,
+        hard_negative_offset_min_m: float = 0.04,
+        hard_negative_offset_max_m: float = 0.12,
     ):
         base_scene = self.scene_builder.generate_scene(rng)
         waypoint_specs = self.waypoint_sampler.sample_waypoint_specs(base_scene, rng)
@@ -491,6 +553,9 @@ class PseudoDemoGenerator:
                 waypoint_specs,
                 rng,
                 hard_negative_local_offsets=hard_negative_local_offsets,
+                hard_negative_offset_scale=hard_negative_offset_scale,
+                hard_negative_offset_min_m=hard_negative_offset_min_m,
+                hard_negative_offset_max_m=hard_negative_offset_max_m,
             )
             self._accumulate_attach_stats(totals, stats)
         return totals

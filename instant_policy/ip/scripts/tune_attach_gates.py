@@ -34,6 +34,10 @@ def _new_totals() -> Dict[str, float]:
         "cap_sum_failed_target": 0.0,
         "hard_negative_probes": 0.0,
         "hard_negative_false_attach": 0.0,
+        "target_close_with_other_eligible": 0.0,
+        "target_close_other_eligible_count_sum": 0.0,
+        "hard_negative_other_eligible": 0.0,
+        "hard_negative_other_eligible_count_sum": 0.0,
     }
 
 
@@ -70,9 +74,27 @@ def _summarize(totals: Dict[str, float]) -> Dict[str, float]:
     hard_negative_false_rate = _safe_div(
         totals["hard_negative_false_attach"], totals["hard_negative_probes"]
     )
+    wrong_object_candidate_rate = _safe_div(
+        totals["target_close_with_other_eligible"], target_close
+    )
+    hard_negative_other_eligible_rate = _safe_div(
+        totals["hard_negative_other_eligible"], totals["hard_negative_probes"]
+    )
+    mean_other_eligible_per_target_close = _safe_div(
+        totals["target_close_other_eligible_count_sum"], target_close
+    )
+    mean_other_eligible_per_hard_negative = _safe_div(
+        totals["hard_negative_other_eligible_count_sum"], totals["hard_negative_probes"]
+    )
 
-    # Rank by attach recall while penalizing false attach on hard-negative probes.
-    score = 0.6 * target_attach_rate + 0.2 * attach_rate + 0.2 * (1.0 - hard_negative_false_rate)
+    # Rank by attach recall while penalizing ambiguous/wrong-object eligibility.
+    score = (
+        0.45 * target_attach_rate
+        + 0.10 * attach_rate
+        + 0.20 * (1.0 - hard_negative_false_rate)
+        + 0.15 * (1.0 - wrong_object_candidate_rate)
+        + 0.10 * (1.0 - hard_negative_other_eligible_rate)
+    )
 
     return {
         "score": score,
@@ -86,6 +108,10 @@ def _summarize(totals: Dict[str, float]) -> Dict[str, float]:
         "mean_dist_failed_target": mean_dist_failed_target,
         "mean_cap_failed_target": mean_cap_failed_target,
         "hard_negative_false_rate": hard_negative_false_rate,
+        "wrong_object_candidate_rate": wrong_object_candidate_rate,
+        "hard_negative_other_eligible_rate": hard_negative_other_eligible_rate,
+        "mean_other_eligible_per_target_close": mean_other_eligible_per_target_close,
+        "mean_other_eligible_per_hard_negative": mean_other_eligible_per_hard_negative,
     }
 
 
@@ -118,25 +144,23 @@ def _build_config(args, skill: str, attach_radius: float, capture_min_points: in
     )
 
 
-def _make_hard_negative_local_offsets(offset_m: float) -> np.ndarray:
-    d = float(offset_m)
-    return np.array(
-        [
-            [d, 0.0, 0.0],
-            [-d, 0.0, 0.0],
-            [0.0, d, 0.0],
-            [0.0, -d, 0.0],
-            [0.0, 0.0, d],
-            [0.0, 0.0, -d],
-        ],
-        dtype=np.float64,
-    )
-
-
 def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List[str]):
     combo_totals = _new_totals()
     per_skill = {}
-    hard_negative_local_offsets = _make_hard_negative_local_offsets(args.hard_negative_offset_m)
+    hard_negative_local_offsets = None
+    if args.hard_negative_offset_m is not None:
+        d = float(args.hard_negative_offset_m)
+        hard_negative_local_offsets = np.array(
+            [
+                [d, 0.0, 0.0],
+                [-d, 0.0, 0.0],
+                [0.0, d, 0.0],
+                [0.0, -d, 0.0],
+                [0.0, 0.0, d],
+                [0.0, 0.0, -d],
+            ],
+            dtype=np.float64,
+        )
 
     for skill_idx, skill in enumerate(skills):
         config = _build_config(args, skill, attach_radius, capture_min_points)
@@ -150,6 +174,9 @@ def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List
             stats = generator.evaluate_task_attach_stats(
                 task_rng,
                 hard_negative_local_offsets=hard_negative_local_offsets,
+                hard_negative_offset_scale=args.hard_negative_offset_scale,
+                hard_negative_offset_min_m=args.hard_negative_offset_min_m,
+                hard_negative_offset_max_m=args.hard_negative_offset_max_m,
             )
             _acc(skill_totals, stats)
             skill_totals["num_tasks"] += 1.0
@@ -178,7 +205,7 @@ def _print_ranked(rows: List[dict], top_k: int) -> None:
     print("\nAttach tuning results (ranked):")
     print(
         "rank  radius  cap_min  score    target_att  overall_att  target_miss  "
-        "hardneg_fa  close_events"
+        "hardneg_fa  wrongobj  hardneg_wrongobj  close_events"
     )
     for i, row in enumerate(top, start=1):
         m = row["metrics"]
@@ -186,7 +213,9 @@ def _print_ranked(rows: List[dict], top_k: int) -> None:
         print(
             f"{i:>4}  {row['attach_radius']:<6.3f}  {row['attach_capture_min_points']:<7d}  "
             f"{m['score']:<7.4f}  {m['target_attach_rate']:<10.4f}  {m['attach_rate']:<11.4f}  "
-            f"{m['target_miss_rate']:<11.4f}  {m['hard_negative_false_rate']:<10.4f}  {int(t['close_events'])}"
+            f"{m['target_miss_rate']:<11.4f}  {m['hard_negative_false_rate']:<10.4f}  "
+            f"{m['wrong_object_candidate_rate']:<8.4f}  {m['hard_negative_other_eligible_rate']:<16.4f}  "
+            f"{int(t['close_events'])}"
         )
 
 
@@ -201,12 +230,20 @@ def _write_csv(path: str, rows: List[dict]) -> None:
         "untarget_attach_rate",
         "untarget_miss_rate",
         "hard_negative_false_rate",
+        "wrong_object_candidate_rate",
+        "hard_negative_other_eligible_rate",
+        "mean_other_eligible_per_target_close",
+        "mean_other_eligible_per_hard_negative",
         "mean_dist_attached",
         "mean_cap_attached",
         "mean_dist_failed_target",
         "mean_cap_failed_target",
         "hard_negative_probes",
         "hard_negative_false_attach",
+        "target_close_with_other_eligible",
+        "target_close_other_eligible_count_sum",
+        "hard_negative_other_eligible",
+        "hard_negative_other_eligible_count_sum",
         "close_events",
         "target_close_events",
         "untargeted_close_events",
@@ -235,12 +272,20 @@ def _write_csv(path: str, rows: List[dict]) -> None:
                     "untarget_attach_rate": m["untarget_attach_rate"],
                     "untarget_miss_rate": m["untarget_miss_rate"],
                     "hard_negative_false_rate": m["hard_negative_false_rate"],
+                    "wrong_object_candidate_rate": m["wrong_object_candidate_rate"],
+                    "hard_negative_other_eligible_rate": m["hard_negative_other_eligible_rate"],
+                    "mean_other_eligible_per_target_close": m["mean_other_eligible_per_target_close"],
+                    "mean_other_eligible_per_hard_negative": m["mean_other_eligible_per_hard_negative"],
                     "mean_dist_attached": m["mean_dist_attached"],
                     "mean_cap_attached": m["mean_cap_attached"],
                     "mean_dist_failed_target": m["mean_dist_failed_target"],
                     "mean_cap_failed_target": m["mean_cap_failed_target"],
                     "hard_negative_probes": int(t["hard_negative_probes"]),
                     "hard_negative_false_attach": int(t["hard_negative_false_attach"]),
+                    "target_close_with_other_eligible": int(t["target_close_with_other_eligible"]),
+                    "target_close_other_eligible_count_sum": float(t["target_close_other_eligible_count_sum"]),
+                    "hard_negative_other_eligible": int(t["hard_negative_other_eligible"]),
+                    "hard_negative_other_eligible_count_sum": float(t["hard_negative_other_eligible_count_sum"]),
                     "close_events": int(t["close_events"]),
                     "target_close_events": int(t["target_close_events"]),
                     "untargeted_close_events": int(t["untargeted_close_events"]),
@@ -293,8 +338,26 @@ def main():
     parser.add_argument(
         "--hard_negative_offset_m",
         type=float,
-        default=0.06,
-        help="Local-frame offset magnitude for hard-negative attach probes at targeted close events.",
+        default=None,
+        help="Optional fixed local-frame offset magnitude for hard-negative probes. If omitted, object-scale offsets are used.",
+    )
+    parser.add_argument(
+        "--hard_negative_offset_scale",
+        type=float,
+        default=0.35,
+        help="Object-scale multiplier for hard-negative probe offset (used when --hard_negative_offset_m is omitted).",
+    )
+    parser.add_argument(
+        "--hard_negative_offset_min_m",
+        type=float,
+        default=0.04,
+        help="Minimum hard-negative probe offset in meters for object-scale mode.",
+    )
+    parser.add_argument(
+        "--hard_negative_offset_max_m",
+        type=float,
+        default=0.12,
+        help="Maximum hard-negative probe offset in meters for object-scale mode.",
     )
 
     parser.add_argument("--max_meshes", type=int, default=None)
@@ -322,7 +385,9 @@ def main():
             f"target_attach={m['target_attach_rate']:.4f}, "
             f"overall_attach={m['attach_rate']:.4f}, "
             f"target_miss={m['target_miss_rate']:.4f}, "
-            f"hardneg_false_attach={m['hard_negative_false_rate']:.4f}"
+            f"hardneg_false_attach={m['hard_negative_false_rate']:.4f}, "
+            f"wrongobj={m['wrong_object_candidate_rate']:.4f}, "
+            f"hardneg_wrongobj={m['hard_negative_other_eligible_rate']:.4f}"
         )
         results.append(row)
 
