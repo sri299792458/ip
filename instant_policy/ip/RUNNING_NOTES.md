@@ -153,6 +153,26 @@ Increase pseudo-debug video quality without affecting training observations.
 ### User-visible Effect
 - Rendered videos are sharper, but point-cloud observations used for training are unchanged.
 
+## Pyrender Context-Binding Fix for Dual Renderers (2026-02-10)
+
+### Decision
+Use separate mesh caches for observation and visual offscreen renderers.
+
+### Changed
+- `ip/generation/renderer.py`
+  - replaced single mesh cache with:
+    - `mesh_cache_obs`
+    - `mesh_cache_visual`
+  - observation path uses obs cache; visual-video path uses visual cache.
+
+### Why
+- Pyrender mesh primitives are OpenGL-context bound.
+- Reusing the same mesh primitive across two offscreen renderers raised:
+  - `ValueError: Mesh is already bound to a context`
+
+### User-visible Effect
+- High-quality video rendering works with dual-renderer setup without crashing.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision

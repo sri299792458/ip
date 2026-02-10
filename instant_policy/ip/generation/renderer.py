@@ -27,7 +27,9 @@ class DepthRenderer:
         self.visual_width = int(visual_width) if visual_width is not None else int(cameras[0].width)
         self.visual_height = int(visual_height) if visual_height is not None else int(cameras[0].height)
         self.visual_renderer = pyrender.OffscreenRenderer(self.visual_width, self.visual_height)
-        self.mesh_cache: Dict[int, pyrender.Mesh] = {}
+        # Pyrender mesh primitives are renderer-context bound. Keep per-context caches.
+        self.mesh_cache_obs: Dict[int, pyrender.Mesh] = {}
+        self.mesh_cache_visual: Dict[int, pyrender.Mesh] = {}
         if gripper_mesh is None:
             gripper_mesh = trimesh.creation.icosphere(radius=0.015)
         self.gripper_mesh = pyrender.Mesh.from_trimesh(gripper_mesh, smooth=False)
@@ -43,11 +45,12 @@ class DepthRenderer:
     def _mesh_key(self, mesh):
         return id(mesh)
 
-    def _get_mesh(self, mesh):
+    def _get_mesh(self, mesh, for_visual: bool = False):
         key = self._mesh_key(mesh)
-        if key not in self.mesh_cache:
-            self.mesh_cache[key] = pyrender.Mesh.from_trimesh(mesh, smooth=False)
-        return self.mesh_cache[key]
+        cache = self.mesh_cache_visual if for_visual else self.mesh_cache_obs
+        if key not in cache:
+            cache[key] = pyrender.Mesh.from_trimesh(mesh, smooth=False)
+        return cache[key]
 
     def _depth_to_pointcloud(self, depth: np.ndarray, cam: CameraConfig):
         h, w = depth.shape
@@ -66,7 +69,7 @@ class DepthRenderer:
     def render_observation(self, scene, visual_idx: Optional[int] = None):
         pyr_scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0, 1.0], ambient_light=[0.5, 0.5, 0.5])
         for obj in scene.objects:
-            mesh = self._get_mesh(obj.mesh)
+            mesh = self._get_mesh(obj.mesh, for_visual=False)
             pyr_scene.add(mesh, pose=obj.pose)
         light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
         pyr_scene.add(light, pose=np.eye(4))
@@ -107,7 +110,7 @@ class DepthRenderer:
     def render_visual(self, scene, gripper_pose: np.ndarray, visual_idx: int):
         pyr_scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0, 1.0], ambient_light=[0.5, 0.5, 0.5])
         for obj in scene.objects:
-            mesh = self._get_mesh(obj.mesh)
+            mesh = self._get_mesh(obj.mesh, for_visual=True)
             pyr_scene.add(mesh, pose=obj.pose)
         pyr_scene.add(self.gripper_mesh_visual, pose=gripper_pose)
         light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
