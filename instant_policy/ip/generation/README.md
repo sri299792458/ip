@@ -39,7 +39,7 @@ These are the defaults we treat as paper-canonical for pseudo generation:
 - attach on open->closed and detach on closed->open
 - contact-gated attach radius (`attach_radius=0.02 m`)
 - gripper mesh frame canonicalization to policy-origin frame (`z=0.088 m` from URDF base/flange frame)
-- three depth cameras rendered via PyRender
+- three depth cameras rendered via PyRender (RLBench-style rig offsets relative to workspace center)
 
 Reference files:
 - generation constants: `instant_policy/ip/generation/config.py`

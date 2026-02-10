@@ -48,6 +48,28 @@ Extend the camera dump utility with workspace/task-relative metrics to tune pseu
 ### User-visible Effect
 - Camera dump JSON now directly provides the numbers needed to set pseudo camera poses from first principles.
 
+## Pseudo Camera Rig Alignment to RLBench Geometry (2026-02-10)
+
+### Decision
+Update pseudo-demo default camera poses to match RLBench-style workspace-relative offsets from runtime camera dump.
+
+### Changed
+- `ip/generation/config.py`
+  - `default_cameras()` now uses RLBench-derived offsets:
+    - front: `[+1.10, 0.00, +0.828]`
+    - left: `[-0.425, +0.20, +1.228]`
+    - right: `[-0.425, -0.20, +1.228]`
+  - offsets are anchored to pseudo target/workspace frame for stable composition.
+- `ip/generation/README.md`
+  - updated default-camera note to reflect RLBench-style rig.
+
+### Why
+- Camera placement changes depth-occlusion/coverage statistics even for point-cloud training.
+- Aligning pseudo camera geometry to RLBench reduces train/eval distribution mismatch.
+
+### User-visible Effect
+- Generated pseudo point clouds now come from a more RLBench-like multi-camera viewpoint setup.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision

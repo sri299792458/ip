@@ -11,3 +11,4 @@ instant_policy/ip/deployment/debug_frames/
 instant_policy/ip/deployment/debug_waypoints/
 instant_policy-main/
 instant_policy/docs/papers/instant_policy/
+rlbench_camera_lift_lid_vnc.json

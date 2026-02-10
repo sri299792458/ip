@@ -19,11 +19,17 @@ class CameraConfig:
 
 
 def default_cameras():
+    # RLBench-style 3-camera rig offsets measured from workspace center.
+    # We anchor the rig to the pseudo workspace target frame to keep scene
+    # composition closer to RLBench depth observations.
     target = np.array([0.0, 0.0, 0.15], dtype=np.float32)
+    front_offset = np.array([1.10, 0.00, 0.828], dtype=np.float32)
+    left_offset = np.array([-0.425, 0.20, 1.228], dtype=np.float32)
+    right_offset = np.array([-0.425, -0.20, 1.228], dtype=np.float32)
     cams = [
-        CameraConfig(pose=look_at([0.7, 0.0, 0.6], target)),
-        CameraConfig(pose=look_at([0.0, -0.7, 0.6], target)),
-        CameraConfig(pose=look_at([0.0, 0.7, 0.6], target)),
+        CameraConfig(pose=look_at(target + front_offset, target)),
+        CameraConfig(pose=look_at(target + left_offset, target)),
+        CameraConfig(pose=look_at(target + right_offset, target)),
     ]
     return cams
 
