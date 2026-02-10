@@ -29,6 +29,7 @@ def build_config(args):
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
         attach_radius=args.attach_radius,
+        attach_capture_min_points=args.attach_capture_min_points,
         gripper_mesh_path=args.gripper_mesh_path,
         seed=args.seed,
         save_renders=args.save_renders,
@@ -86,13 +87,19 @@ def main():
         choices=["auto", "random", "grasp", "pick_place", "pull", "push"],
         help="Force one waypoint category for debug generation; auto keeps default 50/50 behavior.",
     )
-    parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.07, 0.13])
+    parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.2, 0.3])
     parser.add_argument("--trans_spacing", type=float, default=0.01)
     parser.add_argument("--rot_spacing_deg", type=float, default=3.0)
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
     parser.add_argument("--attach_radius", type=float, default=0.02)
+    parser.add_argument(
+        "--attach_capture_min_points",
+        type=int,
+        default=3,
+        help="Minimum object surface points inside jaw-capture region required for attach.",
+    )
     parser.add_argument(
         "--gripper_mesh_path",
         type=str,

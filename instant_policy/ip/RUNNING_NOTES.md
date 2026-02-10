@@ -1633,3 +1633,65 @@ Improve debug-render readability with white background and blue gripper.
 
 ### Why
 - Easier visual inspection of gripper/object interaction in exported debug frames/videos.
+
+## Pseudo-Demo Scale Prior Update (2026-02-10)
+
+### Decision
+Set the default pseudo object metric scale prior to `0.20..0.30 m` for current experiments.
+
+### Changed
+- `ip/generation/config.py`:
+  - `object_scale_range` default updated from `(0.07, 0.13)` to `(0.2, 0.3)`.
+- `ip/scripts/generate_pseudo_demos.py`:
+  - CLI default `--object_scale_range` updated from `0.07 0.13` to `0.2 0.3`.
+- `ip/generation/README.md`:
+  - default scale prior documentation updated to `0.20..0.30 m`.
+
+### Why
+- Current pseudo renders looked gripper-dominant with smaller object prior.
+- This establishes a larger object-size prior as the repo default so manual CLI overrides are no longer required each run.
+
+## Pseudo-Demo Attach Logic Upgrade (2026-02-10)
+
+### Decision
+Replace distance-only attach gating with a combined rule:
+- distance-to-gripper surface (existing `attach_radius`), and
+- jaw-capture region occupancy (for thin objects between open fingers).
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`:
+  - added mesh-derived jaw-capture region estimation in gripper frame,
+  - added object capture-count check at close transitions,
+  - attach now succeeds when either distance gate passes or capture-count gate passes,
+  - preserved object-centric behavior: if waypoint targets object `k`, only `k` is eligible on close,
+  - for non-object-centric waypoints, choose best attach candidate by capture support then distance.
+- `ip/generation/README.md`:
+  - updated attach semantics documentation to match the new gating rule.
+
+### Why
+- Distance to an *open* gripper mesh can miss valid grasp situations for thin geometries (e.g., table legs) that lie between fingers before close.
+- The jaw-capture gate better matches rigid close-event attachment while staying fully kinematic and paper-style (no collision solver).
+
+## Attach Tuning Sweep Tool (2026-02-10)
+
+### Decision
+Add a deterministic sweep script to tune attach thresholds from metrics, not from ad-hoc visual inspection.
+
+### Changed
+- `ip/generation/config.py`:
+  - added `attach_capture_min_points` (default `3`) as a first-class config parameter.
+- `ip/scripts/generate_pseudo_demos.py`:
+  - added CLI argument `--attach_capture_min_points`.
+- `ip/generation/pseudo_demo_generator.py`:
+  - replaced hardcoded capture threshold with config-driven parameter,
+  - added no-render simulation path and attach event stats collection,
+  - added `evaluate_demo_attach_stats(...)` and `evaluate_task_attach_stats(...)` for fast metric sweeps.
+- `ip/scripts/tune_attach_gates.py`:
+  - new script to sweep `attach_radius x attach_capture_min_points`,
+  - reports ranked metrics and optional JSON/CSV outputs.
+- `ip/generation/README.md`:
+  - documented the new tuning command and `attach_capture_min_points`.
+
+### Why
+- We needed a clean, repeatable way to tune thin-object attach behavior without repeatedly changing logic.
+- Metrics from event-level attach stats allow principled threshold selection while preserving paper-style kinematic generation.

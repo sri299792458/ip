@@ -96,7 +96,7 @@ class GenerationConfig:
         [0.05, 0.4],
     ], dtype=np.float32))
     table_height: float = 0.0
-    object_scale_range: Tuple[float, float] = (0.07, 0.13)
+    object_scale_range: Tuple[float, float] = (0.2, 0.3)
     max_meshes: Optional[int] = None
     cache_meshes: bool = False
 
@@ -113,6 +113,7 @@ class GenerationConfig:
 
     attach_on_grasp: bool = True
     attach_radius: float = 0.02
+    attach_capture_min_points: int = 3
     gripper_mesh_path: Optional[str] = None  # Required by generator for paper-fidelity runs.
 
     cameras: List[CameraConfig] = field(default_factory=default_cameras)

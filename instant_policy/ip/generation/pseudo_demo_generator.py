@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import trimesh
@@ -16,7 +16,6 @@ except Exception:
 from ip.generation.augmentation import TrajectoryAugmenter
 from ip.generation.config import GenerationConfig
 from ip.generation.geometry import make_transform, random_rotation, transform_points
-from ip.generation.renderer import DepthRenderer
 from ip.generation.scene_builder import SceneBuilder, Scene
 from ip.generation.trajectory_interpolator import TrajectoryInterpolator
 from ip.generation.waypoint_sampler import Waypoint, WaypointSampler
@@ -30,7 +29,7 @@ class PseudoDemoGenerator:
     # UR flange/base -> policy origin offset along +Z is ~88 mm.
     POLICY_ORIGIN_Z_FROM_URDF_BASE_M = 0.088
 
-    def __init__(self, config: GenerationConfig, scene_encoder=None):
+    def __init__(self, config: GenerationConfig, scene_encoder=None, build_renderer: bool = True):
         self.config = config
         self.scene_encoder = scene_encoder
         self.scene_builder = SceneBuilder(
@@ -48,6 +47,7 @@ class PseudoDemoGenerator:
             self.gripper_mesh,
             self.scene_builder.surface_sample_count,
         )[0].astype(np.float32)
+        self.grasp_capture_region = self._estimate_grasp_capture_region(self.gripper_mesh)
         self.waypoint_sampler = WaypointSampler(
             bias_prob=config.bias_prob,
             num_waypoints_range=config.num_waypoints_range,
@@ -63,14 +63,17 @@ class PseudoDemoGenerator:
             pose_noise_std=config.pose_noise_std,
             rot_noise_deg=config.rot_noise_deg,
         )
-        self.renderer = DepthRenderer(
-            cameras=config.cameras,
-            downsample_voxel=config.render_downsample_voxel,
-            max_points_per_obs=config.max_points_per_obs,
-            gripper_mesh=self.gripper_mesh,
-            visual_width=config.render_visual_width,
-            visual_height=config.render_visual_height,
-        )
+        self.renderer = None
+        if build_renderer:
+            from ip.generation.renderer import DepthRenderer
+            self.renderer = DepthRenderer(
+                cameras=config.cameras,
+                downsample_voxel=config.render_downsample_voxel,
+                max_points_per_obs=config.max_points_per_obs,
+                gripper_mesh=self.gripper_mesh,
+                visual_width=config.render_visual_width,
+                visual_height=config.render_visual_height,
+            )
 
     def _load_gripper_mesh(self) -> trimesh.Trimesh:
         path = self.config.gripper_mesh_path
@@ -149,24 +152,6 @@ class PseudoDemoGenerator:
             obj.pose[:3, 3] += pos_noise.astype(np.float32)
         return varied
 
-    def _closest_object(self, scene: Scene, gripper_pose: np.ndarray, ignore_idx: Optional[int] = None):
-        grip_pts = transform_points(self.gripper_surface_points, gripper_pose)
-        best_idx = None
-        best_dist = None
-        for idx, obj in enumerate(scene.objects):
-            if ignore_idx is not None and idx == ignore_idx:
-                continue
-            obj_pts = transform_points(obj.surface_points, obj.pose)
-            diff = obj_pts[:, None, :] - grip_pts[None, :, :]
-            d_sq = np.einsum("ijk,ijk->ij", diff, diff)
-            dist = float(np.sqrt(np.min(d_sq)))
-            if best_dist is None or dist < best_dist:
-                best_dist = dist
-                best_idx = idx
-        if best_idx is None:
-            return None, None
-        return best_idx, best_dist
-
     def _object_distance(self, scene: Scene, gripper_pose: np.ndarray, obj_index: int):
         if obj_index < 0 or obj_index >= len(scene.objects):
             return None
@@ -177,16 +162,130 @@ class PseudoDemoGenerator:
         d_sq = np.einsum("ijk,ijk->ij", diff, diff)
         return float(np.sqrt(np.min(d_sq)))
 
-    def _render_trajectory(self, scene: Scene, traj: List[Waypoint], render_dir: Optional[str] = None, video_writer=None):
+    def _estimate_grasp_capture_region(self, gripper_mesh: trimesh.Trimesh):
+        """Estimate a jaw-capture prism from the canonical gripper mesh.
+
+        Distance-to-open-mesh alone misses thin objects that lie between open fingers.
+        This region approximates where an object would be captured when the gripper closes.
+        """
+        verts = np.asarray(gripper_mesh.vertices, dtype=np.float64)
+        if verts.shape[0] == 0:
+            raise RuntimeError("Cannot estimate grasp-capture region from empty gripper mesh.")
+
+        z_vals = verts[:, 2]
+        tip_z = float(np.quantile(z_vals, 0.98))
+        tip_band = verts[z_vals >= float(np.quantile(z_vals, 0.90))]
+        if tip_band.shape[0] < 16:
+            tip_band = verts
+
+        left = tip_band[tip_band[:, 1] > 0.0]
+        right = tip_band[tip_band[:, 1] < 0.0]
+        if left.shape[0] > 0 and right.shape[0] > 0:
+            # Inner jaw boundaries near the fingertip area.
+            y_min = float(np.max(right[:, 1]))
+            y_max = float(np.min(left[:, 1]))
+        else:
+            y_half = float(np.quantile(np.abs(tip_band[:, 1]), 0.75))
+            y_min = -y_half
+            y_max = y_half
+
+        if not np.isfinite(y_min) or not np.isfinite(y_max) or y_max <= y_min:
+            y_half = float(np.quantile(np.abs(tip_band[:, 1]), 0.75))
+            y_min = -y_half
+            y_max = y_half
+
+        x_half = float(np.quantile(np.abs(tip_band[:, 0]), 0.95))
+        ext = np.asarray(gripper_mesh.extents, dtype=np.float64)
+        xy_margin = float(max(0.003, 0.05 * min(ext[0], ext[1])))
+        z_depth = float(np.clip(0.6 * ext[2], 0.04, 0.08))
+
+        return {
+            "x_min": float(-x_half - xy_margin),
+            "x_max": float(x_half + xy_margin),
+            "y_min": float(y_min - xy_margin),
+            "y_max": float(y_max + xy_margin),
+            "z_min": float(tip_z - z_depth),
+            "z_max": float(tip_z + xy_margin),
+        }
+
+    def _object_capture_count(self, scene: Scene, gripper_pose: np.ndarray, obj_index: int) -> int:
+        if obj_index < 0 or obj_index >= len(scene.objects):
+            return 0
+        region = self.grasp_capture_region
+        obj = scene.objects[obj_index]
+        obj_pts_w = transform_points(obj.surface_points, obj.pose)
+        obj_pts_e = transform_points(obj_pts_w, np.linalg.inv(gripper_pose))
+
+        inside = (
+            (obj_pts_e[:, 0] >= region["x_min"]) &
+            (obj_pts_e[:, 0] <= region["x_max"]) &
+            (obj_pts_e[:, 1] >= region["y_min"]) &
+            (obj_pts_e[:, 1] <= region["y_max"]) &
+            (obj_pts_e[:, 2] >= region["z_min"]) &
+            (obj_pts_e[:, 2] <= region["z_max"])
+        )
+        return int(np.count_nonzero(inside))
+
+    def _object_attach_metrics(self, scene: Scene, gripper_pose: np.ndarray, obj_index: int):
+        dist = self._object_distance(scene, gripper_pose, obj_index)
+        cap_count = self._object_capture_count(scene, gripper_pose, obj_index)
+        return dist, cap_count
+
+    def _should_attach(self, dist: Optional[float], cap_count: int) -> bool:
+        if dist is not None and dist <= self.config.attach_radius:
+            return True
+        if cap_count >= int(self.config.attach_capture_min_points):
+            return True
+        return False
+
+    @staticmethod
+    def _new_attach_stats() -> Dict[str, float]:
+        return {
+            "close_events": 0.0,
+            "target_close_events": 0.0,
+            "untargeted_close_events": 0.0,
+            "attach_success": 0.0,
+            "attach_success_target": 0.0,
+            "attach_success_untargeted": 0.0,
+            "attach_miss_target": 0.0,
+            "attach_miss_untargeted": 0.0,
+            "detach_events": 0.0,
+            "dist_sum_attached": 0.0,
+            "dist_count_attached": 0.0,
+            "cap_sum_attached": 0.0,
+            "dist_sum_failed_target": 0.0,
+            "dist_count_failed_target": 0.0,
+            "cap_sum_failed_target": 0.0,
+        }
+
+    @staticmethod
+    def _accumulate_attach_stats(dst: Dict[str, float], src: Dict[str, float]) -> None:
+        for key, val in src.items():
+            dst[key] = float(dst.get(key, 0.0)) + float(val)
+
+    def _render_trajectory(
+        self,
+        scene: Scene,
+        traj: List[Waypoint],
+        render_dir: Optional[str] = None,
+        video_writer=None,
+        collect_attach_stats: bool = False,
+        skip_render: bool = False,
+    ):
         pcds = []
         adjusted_traj = []
         attached_idx = None
         attached_offset = None
         last_grip = None
+        attach_stats = self._new_attach_stats() if collect_attach_stats else None
         render_stride = max(1, int(self.config.render_stride))
-        visual_idx = int(self.config.render_visual_camera)
-        if visual_idx < 0 or visual_idx >= len(self.renderer.cameras):
-            visual_idx = 0
+        visual_idx = 0
+        if not skip_render:
+            if self.renderer is None:
+                raise RuntimeError("Renderer is not initialized for pseudo-demo rendering.")
+            visual_idx = int(self.config.render_visual_camera)
+            if visual_idx < 0 or visual_idx >= len(self.renderer.cameras):
+                visual_idx = 0
         for w in traj:
             grip = int(w.gripper_state)
             pose = w.pose
@@ -200,46 +299,98 @@ class PseudoDemoGenerator:
             elif grip != last_grip:
                 # Paper Appendix D: attach/detach when gripper state changes.
                 if grip == self.CLOSED and last_grip == self.OPEN and self.config.attach_on_grasp:
+                    if attach_stats is not None:
+                        attach_stats["close_events"] += 1.0
                     obj_idx = None
-                    best_dist = None
+                    attach_dist = None
+                    attach_cap_count = 0
+                    targeted = w.obj_index is not None
+                    if attach_stats is not None:
+                        if targeted:
+                            attach_stats["target_close_events"] += 1.0
+                        else:
+                            attach_stats["untargeted_close_events"] += 1.0
                     # First-principles object-centric behavior:
                     # if this waypoint targets an object, attach only that object.
-                    if w.obj_index is not None:
-                        d = self._object_distance(scene, pose, int(w.obj_index))
-                        if d is not None and d <= self.config.attach_radius:
+                    if targeted:
+                        d, cap_count = self._object_attach_metrics(scene, pose, int(w.obj_index))
+                        attach_dist = d
+                        attach_cap_count = int(cap_count)
+                        if self._should_attach(d, cap_count):
                             obj_idx = int(w.obj_index)
-                            best_dist = d
                     else:
-                        # For non-object-centric waypoints, use nearest object.
-                        obj_idx, best_dist = self._closest_object(scene, pose)
+                        # For non-object-centric waypoints, choose the best attach candidate:
+                        # prioritize jaw-capture support, then nearest distance.
+                        best_key = None
+                        for cand_idx in range(len(scene.objects)):
+                            d, cap_count = self._object_attach_metrics(scene, pose, cand_idx)
+                            if not self._should_attach(d, cap_count):
+                                continue
+                            dist_val = float(d) if d is not None else 1e9
+                            key = (int(cap_count), -dist_val)
+                            if best_key is None or key > best_key:
+                                best_key = key
+                                obj_idx = cand_idx
+                                attach_dist = d
+                                attach_cap_count = int(cap_count)
 
-                    if obj_idx is not None and best_dist is not None and best_dist <= self.config.attach_radius:
+                    if obj_idx is not None:
                         obj = scene.objects[obj_idx]
                         attached_idx = obj_idx
                         attached_offset = np.linalg.inv(pose) @ obj.pose
+                        if attach_stats is not None:
+                            attach_stats["attach_success"] += 1.0
+                            if targeted:
+                                attach_stats["attach_success_target"] += 1.0
+                            else:
+                                attach_stats["attach_success_untargeted"] += 1.0
+                            attach_stats["cap_sum_attached"] += float(attach_cap_count)
+                            if attach_dist is not None:
+                                attach_stats["dist_sum_attached"] += float(attach_dist)
+                                attach_stats["dist_count_attached"] += 1.0
+                    elif attach_stats is not None:
+                        if targeted:
+                            attach_stats["attach_miss_target"] += 1.0
+                            attach_stats["cap_sum_failed_target"] += float(attach_cap_count)
+                            if attach_dist is not None:
+                                attach_stats["dist_sum_failed_target"] += float(attach_dist)
+                                attach_stats["dist_count_failed_target"] += 1.0
+                        else:
+                            attach_stats["attach_miss_untargeted"] += 1.0
                 elif grip == self.OPEN and last_grip == self.CLOSED:
                     attached_idx = None
                     attached_offset = None
+                    if attach_stats is not None:
+                        attach_stats["detach_events"] += 1.0
                 last_grip = grip
             if attached_idx is not None and attached_offset is not None:
                 obj = scene.objects[attached_idx]
                 obj.pose = pose @ attached_offset
-            pcd = self.renderer.render_observation(scene)
+            if skip_render:
+                pcd = np.zeros((0, 3), dtype=np.float32)
+            else:
+                pcd = self.renderer.render_observation(scene)
             color, depth = None, None
-            if pcd.size == 0:
+            if not skip_render and pcd.size == 0:
                 raise RuntimeError(
                     "Rendered empty point cloud. Check camera setup/workspace bounds; "
                     "paper setup expects segmented observations from 3 depth cameras."
                 )
             pcds.append(pcd)
             adjusted_traj.append(Waypoint(pose=pose, gripper_state=grip, obj_index=w.obj_index))
-            if (render_dir is not None or video_writer is not None) and len(pcds) % render_stride == 0:
+            if (
+                not skip_render
+                and (render_dir is not None or video_writer is not None)
+                and len(pcds) % render_stride == 0
+            ):
                 color, depth = self.renderer.render_visual(scene, pose, visual_idx)
                 frame_idx = len(pcds) - 1
                 if render_dir is not None:
                     self._save_render_frame(render_dir, frame_idx, color, depth)
                 if video_writer is not None:
                     video_writer.append_data(color)
+        if collect_attach_stats:
+            return pcds, adjusted_traj, attach_stats
         return pcds, adjusted_traj
 
     def _save_render_frame(self, render_dir, frame_idx, color, depth):
@@ -276,16 +427,8 @@ class PseudoDemoGenerator:
         out_path = os.path.join(video_dir, f"demo.{self.config.render_video_ext}")
         return imageio.get_writer(out_path, fps=self.config.render_video_fps)
 
-    def generate_demo(
-        self,
-        base_scene: Scene,
-        waypoint_specs,
-        rng: np.random.Generator,
-        render_dir: Optional[str] = None,
-        video_dir: Optional[str] = None,
-    ):
+    def _build_demo_trajectory(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator):
         scene = self._vary_scene(base_scene, rng)
-        video_writer = self._open_video_writer(video_dir)
         start_pose = self._sample_start_pose(rng)
         waypoints = self.waypoint_sampler.resolve_waypoints(scene, waypoint_specs)
         start_grip = waypoints[0].gripper_state if waypoints else int(rng.integers(0, 2))
@@ -296,6 +439,39 @@ class PseudoDemoGenerator:
         # Paper-style 10% gripper corruption is applied to saved labels later.
         traj = self.augmenter.augment_motion(traj, rng)
         traj = self.interpolator.interpolate(traj, method="linear")
+        return scene, traj
+
+    def evaluate_demo_attach_stats(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator):
+        scene, traj = self._build_demo_trajectory(base_scene, waypoint_specs, rng)
+        _, _, attach_stats = self._render_trajectory(
+            scene,
+            traj,
+            collect_attach_stats=True,
+            skip_render=True,
+        )
+        return attach_stats
+
+    def evaluate_task_attach_stats(self, rng: np.random.Generator):
+        base_scene = self.scene_builder.generate_scene(rng)
+        waypoint_specs = self.waypoint_sampler.sample_waypoint_specs(base_scene, rng)
+        num_demos = int(rng.integers(self.config.num_demos_per_task[0], self.config.num_demos_per_task[1] + 1))
+        totals = self._new_attach_stats()
+        totals["num_demos"] = float(num_demos)
+        for _ in range(num_demos):
+            stats = self.evaluate_demo_attach_stats(base_scene, waypoint_specs, rng)
+            self._accumulate_attach_stats(totals, stats)
+        return totals
+
+    def generate_demo(
+        self,
+        base_scene: Scene,
+        waypoint_specs,
+        rng: np.random.Generator,
+        render_dir: Optional[str] = None,
+        video_dir: Optional[str] = None,
+    ):
+        scene, traj = self._build_demo_trajectory(base_scene, waypoint_specs, rng)
+        video_writer = self._open_video_writer(video_dir)
         try:
             pcds, dyn_traj = self._render_trajectory(
                 scene,
