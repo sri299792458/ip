@@ -30,6 +30,24 @@ Add a single script to dump RLBench camera intrinsics/extrinsics/near/far from t
 ### User-visible Effect
 - One command now produces machine-readable camera calibration details for all standard RLBench cameras.
 
+## RLBench Workspace-Relative Camera Metrics (2026-02-10)
+
+### Decision
+Extend the camera dump utility with workspace/task-relative metrics to tune pseudo-demo camera placement against RLBench geometry.
+
+### Changed
+- `ip/scripts/dump_rlbench_camera_info.py`
+  - records workspace center/bounds/size from simulator runtime.
+  - records task base position after reset.
+  - annotates per-camera offsets/distances to workspace center and task base.
+  - includes these fields in JSON and terminal summary.
+
+### Why
+- Pseudo-demo camera tuning should match RLBench camera geometry relative to workspace/task, not world origin.
+
+### User-visible Effect
+- Camera dump JSON now directly provides the numbers needed to set pseudo camera poses from first principles.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision

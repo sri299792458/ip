@@ -1,7 +1,8 @@
 import argparse
 import json
+import math
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from rlbench.action_modes.action_mode import MoveArmThenGripper
@@ -33,6 +34,50 @@ def _camera_payload(intrinsics: Any, extrinsics: Any, near: Any, far: Any) -> Di
         "far_plane": float(far),
         "position_world_m": _to_list(extr[:3, 3]),
     }
+
+
+def _workspace_payload(scene) -> Dict[str, Any]:
+    workspace = scene._workspace
+    center = _to_array(workspace.get_position())
+    minx, maxx, miny, maxy, minz, maxz = workspace.get_bounding_box()
+    world_bounds = np.array(
+        [
+            [center[0] - abs(float(minx)), center[0] + float(maxx)],
+            [center[1] - abs(float(miny)), center[1] + float(maxy)],
+            [center[2] + float(minz), center[2] + float(maxz)],
+        ],
+        dtype=np.float64,
+    )
+    return {
+        "center_world_m": _to_list(center),
+        "bounds_world_m": _to_list(world_bounds),
+        "size_m": _to_list(world_bounds[:, 1] - world_bounds[:, 0]),
+    }
+
+
+def _vec_norm(vec) -> float:
+    return float(math.sqrt(float(np.dot(vec, vec))))
+
+
+def _annotate_camera_metrics(
+    camera_data: Dict[str, Any],
+    workspace_center: Optional[np.ndarray],
+    task_base_pos: Optional[np.ndarray],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for cam, payload in camera_data.items():
+        p = dict(payload)
+        cam_pos = _to_array(payload["position_world_m"])
+        if workspace_center is not None:
+            ws_off = cam_pos - workspace_center
+            p["offset_from_workspace_center_m"] = _to_list(ws_off)
+            p["distance_to_workspace_center_m"] = _vec_norm(ws_off)
+        if task_base_pos is not None:
+            task_off = cam_pos - task_base_pos
+            p["offset_from_task_base_m"] = _to_list(task_off)
+            p["distance_to_task_base_m"] = _vec_norm(task_off)
+        out[cam] = p
+    return out
 
 
 def _build_env(headless: bool) -> Environment:
@@ -67,12 +112,15 @@ def _collect_scene_data(env: Environment) -> Dict[str, Any]:
     return out
 
 
-def _collect_obs_misc_data(env: Environment, task_name: str) -> Dict[str, Any]:
+def _collect_obs_misc_data(
+    env: Environment, task_name: str
+) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[np.ndarray]]:
     if task_name not in TASK_NAMES:
         raise ValueError(f"Unknown task_name '{task_name}'. Choices: {sorted(TASK_NAMES.keys())}")
 
     env.launch()
     try:
+        workspace_data = _workspace_payload(env._scene)
         task = env.get_task(TASK_NAMES[task_name])
         _, obs = task.reset()
         out: Dict[str, Any] = {}
@@ -83,7 +131,17 @@ def _collect_obs_misc_data(env: Environment, task_name: str) -> Dict[str, Any]:
                 near=obs.misc[f"{cam}_camera_near"],
                 far=obs.misc[f"{cam}_camera_far"],
             )
-        return out
+        task_base_pos = _to_array(task._task.get_base().get_position())
+        workspace_data["task_base_world_m"] = _to_list(task_base_pos)
+        return out, workspace_data, task_base_pos
+    finally:
+        env.shutdown()
+
+
+def _collect_workspace_only_data(env: Environment) -> Dict[str, Any]:
+    env.launch()
+    try:
+        return _workspace_payload(env._scene)
     finally:
         env.shutdown()
 
@@ -104,16 +162,37 @@ def _compute_diffs(scene_data: Dict[str, Any], obs_data: Dict[str, Any]) -> Dict
     return diffs
 
 
-def _print_summary(scene_data: Dict[str, Any], obs_data: Dict[str, Any], diffs: Dict[str, Any]) -> None:
+def _print_summary(
+    scene_data: Dict[str, Any],
+    obs_data: Dict[str, Any],
+    diffs: Dict[str, Any],
+    workspace_data: Dict[str, Any],
+) -> None:
+    ws = workspace_data.get("center_world_m")
+    ws_size = workspace_data.get("size_m")
+    if ws is not None and ws_size is not None:
+        print(
+            "Workspace center/size: "
+            f"center=({ws[0]:.4f}, {ws[1]:.4f}, {ws[2]:.4f}) "
+            f"size=({ws_size[0]:.4f}, {ws_size[1]:.4f}, {ws_size[2]:.4f})"
+        )
+    task_base = workspace_data.get("task_base_world_m")
+    if task_base is not None:
+        print(
+            "Task base position: "
+            f"({task_base[0]:.4f}, {task_base[1]:.4f}, {task_base[2]:.4f})"
+        )
     print("RLBench camera summary:")
     for cam in CAMERAS:
         if cam not in scene_data:
             continue
         s = scene_data[cam]
         pos = s["position_world_m"]
+        dist_ws = s.get("distance_to_workspace_center_m")
+        ws_txt = f" d_ws={dist_ws:.4f}" if dist_ws is not None else ""
         print(
             f"- {cam:>14}: near={s['near_plane']:.4f} far={s['far_plane']:.4f} "
-            f"pos=({pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f})"
+            f"pos=({pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}){ws_txt}"
         )
         if cam in diffs:
             d = diffs[cam]
@@ -155,21 +234,42 @@ def main() -> None:
     args = parser.parse_args()
 
     env = _build_env(headless=args.headless)
-    scene_data = _collect_scene_data(env)
+    scene_data_raw = _collect_scene_data(env)
+    workspace_data: Dict[str, Any] = {}
     obs_data: Dict[str, Any] = {}
+    task_base_pos = None
     if not args.skip_obs_reset:
-        obs_data = _collect_obs_misc_data(env, args.task_name)
+        obs_data, workspace_data, task_base_pos = _collect_obs_misc_data(env, args.task_name)
+    else:
+        workspace_data = _collect_workspace_only_data(env)
+
+    workspace_center = None
+    if "center_world_m" in workspace_data:
+        workspace_center = _to_array(workspace_data["center_world_m"])
+
+    scene_data = _annotate_camera_metrics(
+        scene_data_raw,
+        workspace_center=workspace_center,
+        task_base_pos=task_base_pos,
+    )
+    if obs_data:
+        obs_data = _annotate_camera_metrics(
+            obs_data,
+            workspace_center=workspace_center,
+            task_base_pos=task_base_pos,
+        )
 
     diffs = _compute_diffs(scene_data, obs_data) if obs_data else {}
     payload = {
         "task_name": args.task_name,
         "headless": args.headless,
+        "workspace": workspace_data,
         "scene_data": scene_data,
         "obs_reset_data": obs_data,
         "scene_vs_obs_diffs": diffs,
     }
 
-    _print_summary(scene_data, obs_data, diffs)
+    _print_summary(scene_data, obs_data, diffs, workspace_data)
     if args.out_json:
         out_path = Path(args.out_json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
