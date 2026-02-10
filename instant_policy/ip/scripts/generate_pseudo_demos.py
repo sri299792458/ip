@@ -25,7 +25,6 @@ def build_config(args):
         object_scale_range=tuple(args.object_scale_range),
         trans_spacing=args.trans_spacing,
         rot_spacing_deg=args.rot_spacing_deg,
-        use_spherical_guardrails=not args.disable_spherical_guardrails,
         disturbance_prob=args.disturbance_prob,
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
@@ -90,11 +89,6 @@ def main():
     parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.07, 0.13])
     parser.add_argument("--trans_spacing", type=float, default=0.01)
     parser.add_argument("--rot_spacing_deg", type=float, default=3.0)
-    parser.add_argument(
-        "--disable_spherical_guardrails",
-        action="store_true",
-        help="Disable spherical interpolation numeric guardrails (debug only).",
-    )
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")

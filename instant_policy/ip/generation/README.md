@@ -33,6 +33,7 @@ These are the defaults we treat as paper-canonical for pseudo generation:
 - pseudo-task waypoints `2..6` (`num_waypoints_range`)
 - biased/random mix `50/50` (`bias_prob=0.5`)
 - interpolation spacing `1cm / 3deg` (`trans_spacing=0.01`, `rot_spacing_deg=3.0`)
+- translation interpolation methods `linear/cubic`; rotation interpolation uses quaternion Slerp
 - disturbance `30%` (`disturbance_prob=0.3`)
 - gripper-noise `10%` (`gripper_noise_prob=0.1`)
 - Robotiq 2F-85 mesh required (`--gripper_mesh_path`)
@@ -202,7 +203,6 @@ If RGB renders look static, this can still be correct:
 - Storage explosion: use `trajectory` mode + ring buffer.
 - Unexpected no-motion visuals: verify gripper state transitions and attachment behavior.
 - If the gripper appears to pass through objects frequently: verify mesh frame canonicalization and that `attach_radius` is not too large for your object scale prior.
-- To reproduce legacy spherical interpolation behavior for debugging, use `--disable_spherical_guardrails`.
 
 ## Dependencies
 

@@ -212,6 +212,84 @@ Add an explicit CLI switch to disable spherical interpolation guardrails for con
 ### User-visible Effect
 - You can run safe default mode and legacy spherical mode with a single CLI switch.
 
+## Spherical Repro Cleanup and Stable Revert (2026-02-10)
+
+### Decision
+After confirming spherical interpolation reproduces the long-stall behavior, revert to a clean stable baseline without debug toggles.
+
+### Changed
+- `ip/generation/config.py`
+  - default interpolation methods reset to `("linear", "cubic")`.
+  - removed temporary `use_spherical_guardrails` config field.
+- `ip/generation/trajectory_interpolator.py`
+  - removed legacy unchecked spherical branch used only for reproduction.
+  - kept guardrailed spherical math implementation in code path (for explicit future use).
+- `ip/scripts/generate_pseudo_demos.py`
+  - removed temporary `--disable_spherical_guardrails` CLI flag.
+- `ip/generation/pseudo_demo_generator.py`
+  - removed wiring for temporary guardrail-toggle config.
+- `ip/generation/README.md`
+  - removed temporary debug-toggle documentation line.
+
+### Why
+- The repro objective was completed; keeping temporary toggles adds clutter and future confusion.
+
+### User-visible Effect
+- Default pseudo generation is back to the stable interpolation policy with cleaner CLI/config surface.
+
+## Spherical Default Restored With Guardrails (2026-02-10)
+
+### Decision
+Keep `spherical` enabled in default interpolation method sampling, with guarded spherical math retained.
+
+### Changed
+- `ip/generation/config.py`
+  - `interpolation_methods` set to `("linear", "cubic", "spherical")`.
+
+### Why
+- Reproduction showed unguarded spherical caused stalls, but guarded spherical is stable.
+- User preference is to keep spherical behavior in default sampling once safety is confirmed.
+
+### User-visible Effect
+- Default pseudo generation samples spherical trajectories again, without reintroducing the previous unguarded stall mode.
+
+## Spherical Support Consistency Fix (2026-02-10)
+
+### Decision
+Keep configuration and interpolator behavior consistent while retaining paper-aligned spherical option.
+
+### Changed
+- `ip/generation/trajectory_interpolator.py`
+  - restored guarded `spherical` positional interpolation path.
+  - method validation now accepts `linear`, `cubic`, `spherical`.
+
+### Why
+- A temporary intermediate edit removed spherical from interpolator while config still sampled it, which could trigger method-validation failures.
+
+### User-visible Effect
+- Default config including `spherical` now runs consistently again.
+
+## Positional Spherical Removal (2026-02-10)
+
+### Decision
+Remove positional `spherical` interpolation from pseudo-demo trajectory generation and keep translation interpolation to `linear/cubic` only.
+
+### Changed
+- `ip/generation/trajectory_interpolator.py`
+  - removed positional spherical branch and its helper vector-slerp path.
+  - method validation now allows only `linear` and `cubic` for translation.
+- `ip/generation/config.py`
+  - default `interpolation_methods` set to `("linear", "cubic")`.
+- `ip/generation/README.md`
+  - clarified translation interpolation is linear/cubic; rotation interpolation remains quaternion Slerp.
+
+### Why
+- Two-point positional spherical interpolation is underconstrained; the midpoint-center formulation degenerates to near-antipodal vectors and mostly triggers fallback behavior.
+- Keeping it implied “spherical” complexity without real geometric benefit.
+
+### User-visible Effect
+- Cleaner, deterministic translation interpolation behavior with no pseudo-spherical fallback ambiguity.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision
