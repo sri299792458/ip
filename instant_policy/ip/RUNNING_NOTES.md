@@ -1695,3 +1695,7 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### Why
 - We needed a clean, repeatable way to tune thin-object attach behavior without repeatedly changing logic.
 - Metrics from event-level attach stats allow principled threshold selection while preserving paper-style kinematic generation.
+
+### Follow-up
+- The initial sweep measured mostly easy-positive attach recall.
+- We extended tuning to include hard-negative probes at targeted close events (local-frame offsets around the close pose) and added `hard_negative_false_rate` to ranking.

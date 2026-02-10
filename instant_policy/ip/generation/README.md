@@ -167,6 +167,7 @@ python -m ip.scripts.tune_attach_gates \
   --num_demos_per_task 2 \
   --attach_radius_grid 0.015 0.020 0.025 0.030 \
   --attach_capture_min_points_grid 1 3 5 \
+  --hard_negative_offset_m 0.06 \
   --out_json /scratch/.../pseudo_debug/attach_tuning.json \
   --out_csv /scratch/.../pseudo_debug/attach_tuning.csv
 ```

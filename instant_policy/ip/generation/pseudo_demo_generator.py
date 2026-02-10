@@ -256,6 +256,8 @@ class PseudoDemoGenerator:
             "dist_sum_failed_target": 0.0,
             "dist_count_failed_target": 0.0,
             "cap_sum_failed_target": 0.0,
+            "hard_negative_probes": 0.0,
+            "hard_negative_false_attach": 0.0,
         }
 
     @staticmethod
@@ -271,6 +273,7 @@ class PseudoDemoGenerator:
         video_writer=None,
         collect_attach_stats: bool = False,
         skip_render: bool = False,
+        hard_negative_local_offsets: Optional[np.ndarray] = None,
     ):
         pcds = []
         adjusted_traj = []
@@ -313,6 +316,20 @@ class PseudoDemoGenerator:
                     # First-principles object-centric behavior:
                     # if this waypoint targets an object, attach only that object.
                     if targeted:
+                        if (
+                            attach_stats is not None
+                            and hard_negative_local_offsets is not None
+                            and int(w.obj_index) >= 0
+                        ):
+                            for offs_local in np.asarray(hard_negative_local_offsets, dtype=np.float64).reshape(-1, 3):
+                                pose_probe = np.array(pose, copy=True)
+                                pose_probe[:3, 3] += pose[:3, :3] @ offs_local
+                                d_probe, cap_probe = self._object_attach_metrics(
+                                    scene, pose_probe, int(w.obj_index)
+                                )
+                                attach_stats["hard_negative_probes"] += 1.0
+                                if self._should_attach(d_probe, cap_probe):
+                                    attach_stats["hard_negative_false_attach"] += 1.0
                         d, cap_count = self._object_attach_metrics(scene, pose, int(w.obj_index))
                         attach_dist = d
                         attach_cap_count = int(cap_count)
@@ -441,24 +458,40 @@ class PseudoDemoGenerator:
         traj = self.interpolator.interpolate(traj, method="linear")
         return scene, traj
 
-    def evaluate_demo_attach_stats(self, base_scene: Scene, waypoint_specs, rng: np.random.Generator):
+    def evaluate_demo_attach_stats(
+        self,
+        base_scene: Scene,
+        waypoint_specs,
+        rng: np.random.Generator,
+        hard_negative_local_offsets: Optional[np.ndarray] = None,
+    ):
         scene, traj = self._build_demo_trajectory(base_scene, waypoint_specs, rng)
         _, _, attach_stats = self._render_trajectory(
             scene,
             traj,
             collect_attach_stats=True,
             skip_render=True,
+            hard_negative_local_offsets=hard_negative_local_offsets,
         )
         return attach_stats
 
-    def evaluate_task_attach_stats(self, rng: np.random.Generator):
+    def evaluate_task_attach_stats(
+        self,
+        rng: np.random.Generator,
+        hard_negative_local_offsets: Optional[np.ndarray] = None,
+    ):
         base_scene = self.scene_builder.generate_scene(rng)
         waypoint_specs = self.waypoint_sampler.sample_waypoint_specs(base_scene, rng)
         num_demos = int(rng.integers(self.config.num_demos_per_task[0], self.config.num_demos_per_task[1] + 1))
         totals = self._new_attach_stats()
         totals["num_demos"] = float(num_demos)
         for _ in range(num_demos):
-            stats = self.evaluate_demo_attach_stats(base_scene, waypoint_specs, rng)
+            stats = self.evaluate_demo_attach_stats(
+                base_scene,
+                waypoint_specs,
+                rng,
+                hard_negative_local_offsets=hard_negative_local_offsets,
+            )
             self._accumulate_attach_stats(totals, stats)
         return totals
 

@@ -32,6 +32,8 @@ def _new_totals() -> Dict[str, float]:
         "dist_sum_failed_target": 0.0,
         "dist_count_failed_target": 0.0,
         "cap_sum_failed_target": 0.0,
+        "hard_negative_probes": 0.0,
+        "hard_negative_false_attach": 0.0,
     }
 
 
@@ -65,9 +67,12 @@ def _summarize(totals: Dict[str, float]) -> Dict[str, float]:
     mean_cap_failed_target = _safe_div(
         totals["cap_sum_failed_target"], totals["attach_miss_target"]
     )
+    hard_negative_false_rate = _safe_div(
+        totals["hard_negative_false_attach"], totals["hard_negative_probes"]
+    )
 
-    # Rank by target attach quality first, then overall attach consistency.
-    score = 0.7 * target_attach_rate + 0.3 * attach_rate
+    # Rank by attach recall while penalizing false attach on hard-negative probes.
+    score = 0.6 * target_attach_rate + 0.2 * attach_rate + 0.2 * (1.0 - hard_negative_false_rate)
 
     return {
         "score": score,
@@ -80,6 +85,7 @@ def _summarize(totals: Dict[str, float]) -> Dict[str, float]:
         "mean_cap_attached": mean_cap_attached,
         "mean_dist_failed_target": mean_dist_failed_target,
         "mean_cap_failed_target": mean_cap_failed_target,
+        "hard_negative_false_rate": hard_negative_false_rate,
     }
 
 
@@ -112,9 +118,25 @@ def _build_config(args, skill: str, attach_radius: float, capture_min_points: in
     )
 
 
+def _make_hard_negative_local_offsets(offset_m: float) -> np.ndarray:
+    d = float(offset_m)
+    return np.array(
+        [
+            [d, 0.0, 0.0],
+            [-d, 0.0, 0.0],
+            [0.0, d, 0.0],
+            [0.0, -d, 0.0],
+            [0.0, 0.0, d],
+            [0.0, 0.0, -d],
+        ],
+        dtype=np.float64,
+    )
+
+
 def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List[str]):
     combo_totals = _new_totals()
     per_skill = {}
+    hard_negative_local_offsets = _make_hard_negative_local_offsets(args.hard_negative_offset_m)
 
     for skill_idx, skill in enumerate(skills):
         config = _build_config(args, skill, attach_radius, capture_min_points)
@@ -125,7 +147,10 @@ def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List
             # Keep seeds combo-independent so combinations are directly comparable.
             task_seed = args.seed + skill_idx * 1_000_000 + task_idx
             task_rng = np.random.default_rng(task_seed)
-            stats = generator.evaluate_task_attach_stats(task_rng)
+            stats = generator.evaluate_task_attach_stats(
+                task_rng,
+                hard_negative_local_offsets=hard_negative_local_offsets,
+            )
             _acc(skill_totals, stats)
             skill_totals["num_tasks"] += 1.0
 
@@ -153,7 +178,7 @@ def _print_ranked(rows: List[dict], top_k: int) -> None:
     print("\nAttach tuning results (ranked):")
     print(
         "rank  radius  cap_min  score    target_att  overall_att  target_miss  "
-        "untarget_att  close_events"
+        "hardneg_fa  close_events"
     )
     for i, row in enumerate(top, start=1):
         m = row["metrics"]
@@ -161,7 +186,7 @@ def _print_ranked(rows: List[dict], top_k: int) -> None:
         print(
             f"{i:>4}  {row['attach_radius']:<6.3f}  {row['attach_capture_min_points']:<7d}  "
             f"{m['score']:<7.4f}  {m['target_attach_rate']:<10.4f}  {m['attach_rate']:<11.4f}  "
-            f"{m['target_miss_rate']:<11.4f}  {m['untarget_attach_rate']:<12.4f}  {int(t['close_events'])}"
+            f"{m['target_miss_rate']:<11.4f}  {m['hard_negative_false_rate']:<10.4f}  {int(t['close_events'])}"
         )
 
 
@@ -175,10 +200,13 @@ def _write_csv(path: str, rows: List[dict]) -> None:
         "target_miss_rate",
         "untarget_attach_rate",
         "untarget_miss_rate",
+        "hard_negative_false_rate",
         "mean_dist_attached",
         "mean_cap_attached",
         "mean_dist_failed_target",
         "mean_cap_failed_target",
+        "hard_negative_probes",
+        "hard_negative_false_attach",
         "close_events",
         "target_close_events",
         "untargeted_close_events",
@@ -206,10 +234,13 @@ def _write_csv(path: str, rows: List[dict]) -> None:
                     "target_miss_rate": m["target_miss_rate"],
                     "untarget_attach_rate": m["untarget_attach_rate"],
                     "untarget_miss_rate": m["untarget_miss_rate"],
+                    "hard_negative_false_rate": m["hard_negative_false_rate"],
                     "mean_dist_attached": m["mean_dist_attached"],
                     "mean_cap_attached": m["mean_cap_attached"],
                     "mean_dist_failed_target": m["mean_dist_failed_target"],
                     "mean_cap_failed_target": m["mean_cap_failed_target"],
+                    "hard_negative_probes": int(t["hard_negative_probes"]),
+                    "hard_negative_false_attach": int(t["hard_negative_false_attach"]),
                     "close_events": int(t["close_events"]),
                     "target_close_events": int(t["target_close_events"]),
                     "untargeted_close_events": int(t["untargeted_close_events"]),
@@ -259,6 +290,12 @@ def main():
     parser.add_argument("--no_attach", action="store_true")
     parser.add_argument("--attach_radius_grid", type=float, nargs="+", default=[0.015, 0.02, 0.025, 0.03])
     parser.add_argument("--attach_capture_min_points_grid", type=int, nargs="+", default=[1, 3, 5])
+    parser.add_argument(
+        "--hard_negative_offset_m",
+        type=float,
+        default=0.06,
+        help="Local-frame offset magnitude for hard-negative attach probes at targeted close events.",
+    )
 
     parser.add_argument("--max_meshes", type=int, default=None)
     parser.add_argument("--cache_meshes", action="store_true")
@@ -284,7 +321,8 @@ def main():
             f"score={m['score']:.4f}, "
             f"target_attach={m['target_attach_rate']:.4f}, "
             f"overall_attach={m['attach_rate']:.4f}, "
-            f"target_miss={m['target_miss_rate']:.4f}"
+            f"target_miss={m['target_miss_rate']:.4f}, "
+            f"hardneg_false_attach={m['hard_negative_false_rate']:.4f}"
         )
         results.append(row)
 
