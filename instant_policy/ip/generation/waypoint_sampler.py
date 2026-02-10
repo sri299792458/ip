@@ -24,7 +24,7 @@ class Waypoint:
 class WaypointSampler:
     OPEN = 1
     CLOSED = 0
-    VALID_SKILLS = ("random", "grasp", "pick_place", "open", "close")
+    VALID_SKILLS = ("random", "grasp", "pick_place", "pull", "push")
 
     def __init__(
         self,
@@ -156,7 +156,7 @@ class WaypointSampler:
         ]
         return waypoints
 
-    def _open_waypoints(self, scene: Scene, rng: np.random.Generator):
+    def _pull_waypoints(self, scene: Scene, rng: np.random.Generator):
         obj_index = int(rng.integers(0, len(scene.objects)))
         obj = scene.objects[obj_index]
         grasp_pose = self._sample_object_pose(obj, rng)
@@ -173,7 +173,7 @@ class WaypointSampler:
         ]
         return waypoints
 
-    def _close_waypoints(self, scene: Scene, rng: np.random.Generator):
+    def _push_waypoints(self, scene: Scene, rng: np.random.Generator):
         obj_index = int(rng.integers(0, len(scene.objects)))
         obj = scene.objects[obj_index]
         grasp_pose = self._sample_object_pose(obj, rng)
@@ -198,19 +198,19 @@ class WaypointSampler:
                 return self._grasp_waypoints(scene, rng)
             if self.forced_skill == "pick_place":
                 return self._pick_place_waypoints(scene, rng)
-            if self.forced_skill == "open":
-                return self._open_waypoints(scene, rng)
-            return self._close_waypoints(scene, rng)
+            if self.forced_skill == "pull":
+                return self._pull_waypoints(scene, rng)
+            return self._push_waypoints(scene, rng)
 
         if rng.uniform(0.0, 1.0) < self.bias_prob:
-            skill = rng.choice(["grasp", "pick_place", "open", "close"])
+            skill = rng.choice(["grasp", "pick_place", "pull", "push"])
             if skill == "grasp":
                 return self._grasp_waypoints(scene, rng)
             if skill == "pick_place":
                 return self._pick_place_waypoints(scene, rng)
-            if skill == "open":
-                return self._open_waypoints(scene, rng)
-            return self._close_waypoints(scene, rng)
+            if skill == "pull":
+                return self._pull_waypoints(scene, rng)
+            return self._push_waypoints(scene, rng)
         return self._random_waypoints(scene, rng)
 
     def resolve_waypoints(self, scene: Scene, specs: List[WaypointSpec]) -> List[Waypoint]:

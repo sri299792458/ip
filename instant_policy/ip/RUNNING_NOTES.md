@@ -1,6 +1,6 @@
 # Deployment Running Notes
 
-Last updated: 2026-02-08
+Last updated: 2026-02-10
 
 ## Log Discipline
 
@@ -11,6 +11,25 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## RLBench Runtime Camera Dump Utility (2026-02-10)
+
+### Decision
+Add a single script to dump RLBench camera intrinsics/extrinsics/near/far from the running simulator and verify scene-level vs reset-time values.
+
+### Changed
+- Added `ip/scripts/dump_rlbench_camera_info.py`.
+  - Collects `Environment.get_scene_data()` camera payload.
+  - Optionally resets a task and collects `obs.misc` camera payload.
+  - Computes max-abs diffs between scene and reset snapshots.
+  - Prints a concise summary and optionally writes JSON.
+
+### Why
+- Camera placement/scale/debug issues required exact runtime numbers from the actual simulator scene in Apptainer.
+- This removes guesswork and gives a reproducible camera snapshot per run.
+
+### User-visible Effect
+- One command now produces machine-readable camera calibration details for all standard RLBench cameras.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision
@@ -18,7 +37,7 @@ Add deterministic category forcing for pseudo-demo generation so each task type 
 
 ### Changed
 - `ip/scripts/generate_pseudo_demos.py`
-  - added `--force_skill {auto,random,grasp,pick_place,open,close}`.
+  - added `--force_skill {auto,random,grasp,pick_place,pull,push}`.
   - `auto` keeps default stochastic behavior; other values force one category.
 - `ip/generation/config.py`
   - added `forced_skill` to generation config.
@@ -36,6 +55,29 @@ Add deterministic category forcing for pseudo-demo generation so each task type 
 
 ### User-visible Effect
 - You can now generate category-specific debug renders/videos without seed hunting.
+
+## Pseudo-Skill Naming Cleanup (2026-02-08)
+
+### Decision
+Rename pseudo-task category labels from `open/close` to `pull/push` to avoid ambiguity with gripper open/close state.
+
+### Changed
+- `ip/generation/waypoint_sampler.py`
+  - renamed category labels to `pull` and `push`.
+  - renamed internal methods from `_open_waypoints/_close_waypoints` to `_pull_waypoints/_push_waypoints`.
+- `ip/scripts/generate_pseudo_demos.py`
+  - updated `--force_skill` choices to `auto,random,grasp,pick_place,pull,push`.
+- `ip/generation/config.py`
+  - updated `forced_skill` comment values.
+- `ip/generation/README.md`
+  - updated debug loop to use `pull/push` names.
+
+### Why
+- Prior naming suggested gripper commands rather than motion primitives.
+- `pull/push` better matches the actual waypoint behaviors.
+
+### User-visible Effect
+- Debug/CLI category naming now reflects task semantics directly.
 
 ## Video-Only Render Export (2026-02-08)
 

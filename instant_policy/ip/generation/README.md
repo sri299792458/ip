@@ -154,7 +154,7 @@ python -m ip.scripts.generate_pseudo_demos \
 Render one video per task category (debug):
 
 ```bash
-for SKILL in random grasp pick_place open close; do
+for SKILL in random grasp pick_place pull push; do
   python -m ip.scripts.generate_pseudo_demos \
     --shapenet_path /scratch.global/$USER/ShapeNetCore.v2 \
     --save_dir /scratch/.../pseudo_debug/$SKILL/tasks \

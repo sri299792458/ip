@@ -83,7 +83,7 @@ def main():
         "--force_skill",
         type=str,
         default="auto",
-        choices=["auto", "random", "grasp", "pick_place", "open", "close"],
+        choices=["auto", "random", "grasp", "pick_place", "pull", "push"],
         help="Force one waypoint category for debug generation; auto keeps default 50/50 behavior.",
     )
     parser.add_argument("--object_scale_range", type=float, nargs=2, default=[0.07, 0.13])
