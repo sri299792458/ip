@@ -83,8 +83,9 @@ fi
 # ============================================
 cleanup_stale_processes() {
     for pattern in "Xvfb :$DISPLAY_NUM" "x11vnc.*-rfbport $VNC_PORT" "fluxbox"; do
-        pid=$(ps -u "$USER" -o pid= -o args= 2>/dev/null | awk "/$pattern/{print \$1; exit}")
-        [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+        while IFS= read -r pid; do
+            [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+        done < <(ps -u "$USER" -o pid= -o args= 2>/dev/null | awk "/$pattern/{print \$1}")
     done
     rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
 }
@@ -160,13 +161,29 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         fi
 
         # Start Xvfb + VNC
+        XVFB_PID=''
+        X11VNC_PID=''
+        FLUXBOX_PID=''
+        cleanup_bg() {
+            for pid in \"\$FLUXBOX_PID\" \"\$X11VNC_PID\" \"\$XVFB_PID\"; do
+                if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null; then
+                    kill \"\$pid\" 2>/dev/null || true
+                    wait \"\$pid\" 2>/dev/null || true
+                fi
+            done
+        }
+        trap cleanup_bg EXIT
+
         export DISPLAY=:$DISPLAY_NUM
         Xvfb :$DISPLAY_NUM -screen 0 1280x1024x24 &
+        XVFB_PID=\$!
         sleep 2
         if [ \"$ENABLE_VNC\" = \"1\" ]; then
             x11vnc -display :$DISPLAY_NUM -forever -nopw -rfbport $VNC_PORT -noxdamage -nowf &
+            X11VNC_PID=\$!
             sleep 1
             fluxbox &
+            FLUXBOX_PID=\$!
             sleep 1
         fi
 

@@ -26,10 +26,45 @@ def default_cameras():
     front_offset = np.array([1.10, 0.00, 0.828], dtype=np.float32)
     left_offset = np.array([-0.425, 0.20, 1.228], dtype=np.float32)
     right_offset = np.array([-0.425, -0.20, 1.228], dtype=np.float32)
+    # RLBench default camera image size is 128x128. Runtime dump from RLBench
+    # gives |fx|=|fy|≈175.839 with principal point at (64,64).
+    fx = fy = 175.839
+    cx = cy = 64.0
+    width = height = 128
     cams = [
-        CameraConfig(pose=look_at(target + front_offset, target)),
-        CameraConfig(pose=look_at(target + left_offset, target)),
-        CameraConfig(pose=look_at(target + right_offset, target)),
+        CameraConfig(
+            pose=look_at(target + front_offset, target),
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            width=width,
+            height=height,
+            z_near=0.01,
+            z_far=4.5,
+        ),
+        CameraConfig(
+            pose=look_at(target + left_offset, target),
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            width=width,
+            height=height,
+            z_near=0.01,
+            z_far=3.2,
+        ),
+        CameraConfig(
+            pose=look_at(target + right_offset, target),
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            width=width,
+            height=height,
+            z_near=0.01,
+            z_far=3.2,
+        ),
     ]
     return cams
 
@@ -67,7 +102,9 @@ class GenerationConfig:
 
     trans_spacing: float = 0.01
     rot_spacing_deg: float = 3.0
-    interpolation_methods: Tuple[str, ...] = ("linear", "cubic", "spherical")
+    # Keep defaults on stable interpolation paths; spherical can be enabled
+    # explicitly but is not default due occasional numerical degeneracy.
+    interpolation_methods: Tuple[str, ...] = ("linear", "cubic")
 
     disturbance_prob: float = 0.3
     gripper_noise_prob: float = 0.1  # Per-timestep flip probability.

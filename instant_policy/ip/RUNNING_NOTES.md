@@ -70,6 +70,65 @@ Update pseudo-demo default camera poses to match RLBench-style workspace-relativ
 ### User-visible Effect
 - Generated pseudo point clouds now come from a more RLBench-like multi-camera viewpoint setup.
 
+## Pseudo Camera Intrinsics/Resolution Alignment (2026-02-10)
+
+### Decision
+Align pseudo camera intrinsics and resolution to RLBench defaults, not just camera poses.
+
+### Changed
+- `ip/generation/config.py`
+  - `default_cameras()` now sets RLBench-like intrinsics/resolution:
+    - `width=height=128`
+    - `fx=fy=175.839`, `cx=cy=64.0`
+  - sets per-camera clipping planes from RLBench dump:
+    - front `z_far=4.5`
+    - left/right `z_far=3.2`
+    - all `z_near=0.01`
+- `ip/generation/README.md`
+  - updated camera default note to include RLBench intrinsics/resolution alignment.
+
+### Why
+- Pose-only alignment left pseudo rendering on high-res intrinsics (`640x480`, `fx=525`), which increased per-task rendering/downsampling cost and mismatched RLBench observation geometry.
+
+### User-visible Effect
+- Pseudo generation is significantly lighter and camera statistics are closer to RLBench.
+
+## Apptainer Display Process Cleanup (2026-02-10)
+
+### Decision
+Make container display-server lifecycle explicit to avoid lingering Xvfb/x11vnc/fluxbox processes and overlay shutdown timeouts.
+
+### Changed
+- `apptainer/run_instant_policy_vnc.sh`
+  - `cleanup_stale_processes()` now kills all matching stale PIDs, not just the first match.
+  - inside container shell, added `trap ... EXIT` cleanup for background `Xvfb`, `x11vnc`, and `fluxbox` processes.
+
+### Why
+- Repeated runs showed `INFO: Terminating fuse-overlayfs after timeout` caused by remaining background display processes after command completion.
+
+### User-visible Effect
+- Cleaner runner exits with fewer stale-process side effects across consecutive runs.
+
+## Interpolation Stability Guardrails (2026-02-10)
+
+### Decision
+Harden trajectory interpolation against spherical-degeneracy cases and keep defaults on stable interpolation modes.
+
+### Changed
+- `ip/generation/trajectory_interpolator.py`
+  - added robust fallbacks in spherical vector interpolation for near-opposite and ill-conditioned cases (`sin(theta) ~ 0`).
+  - added finite-check fallback to linear interpolation when spherical output is invalid.
+- `ip/generation/config.py`
+  - default `interpolation_methods` changed from `("linear", "cubic", "spherical")` to `("linear", "cubic")`.
+- `ip/generation/pseudo_demo_generator.py`
+  - added fail-fast check for non-finite trajectory poses before rendering.
+
+### Why
+- Random-skill runs can produce interpolation corner cases that lead to non-finite poses and apparent hangs during rendering.
+
+### User-visible Effect
+- Random-skill by-task generation is more stable and avoids silent long stalls from invalid interpolation states.
+
 ## Pseudo-Demo Category Debugging (2026-02-08)
 
 ### Decision

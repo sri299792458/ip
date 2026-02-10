@@ -188,6 +188,11 @@ class PseudoDemoGenerator:
         for w in traj:
             grip = int(w.gripper_state)
             pose = w.pose
+            if not np.all(np.isfinite(pose)):
+                raise RuntimeError(
+                    "Non-finite pose encountered during pseudo trajectory render. "
+                    "Check interpolation settings and waypoint generation."
+                )
             if last_grip is None:
                 last_grip = grip
             elif grip != last_grip:

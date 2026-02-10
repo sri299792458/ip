@@ -15,14 +15,33 @@ class TrajectoryInterpolator:
         v0 = v0 / (np.linalg.norm(v0) + 1e-8)
         v1 = v1 / (np.linalg.norm(v1) + 1e-8)
         dot = np.clip(np.dot(v0, v1), -1.0, 1.0)
+        # Near-identical direction: linear blend is stable.
         if dot > 0.9995:
             v = (1.0 - t) * v0 + t * v1
             return v / (np.linalg.norm(v) + 1e-8)
+        # Near-opposite direction: spherical weights become ill-conditioned.
+        # Use linear blend fallback to avoid NaN/Inf path points.
+        if dot < -0.9995:
+            v = (1.0 - t) * v0 + t * v1
+            n = np.linalg.norm(v)
+            if n < 1e-8:
+                return v0
+            return v / n
         theta = np.arccos(dot)
         sin_t = np.sin(theta)
+        if abs(sin_t) < 1e-8:
+            v = (1.0 - t) * v0 + t * v1
+            n = np.linalg.norm(v)
+            if n < 1e-8:
+                return v0
+            return v / n
         w0 = np.sin((1.0 - t) * theta) / sin_t
         w1 = np.sin(t * theta) / sin_t
-        return w0 * v0 + w1 * v1
+        v = w0 * v0 + w1 * v1
+        n = np.linalg.norm(v)
+        if n < 1e-8:
+            return v0
+        return v / n
 
     def _interp_pos(self, p0, p1, t, method):
         if method == "cubic":
@@ -36,7 +55,10 @@ class TrajectoryInterpolator:
                 return (1.0 - t) * p0 + t * p1
             u = self._slerp_vectors(v0, v1, t)
             r = (1.0 - t) * np.linalg.norm(v0) + t * np.linalg.norm(v1)
-            return center + r * u
+            out = center + r * u
+            if not np.all(np.isfinite(out)):
+                return (1.0 - t) * p0 + t * p1
+            return out
         return (1.0 - t) * p0 + t * p1
 
     def _interp_rot(self, R0, R1, t):
