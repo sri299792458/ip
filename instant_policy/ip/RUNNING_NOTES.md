@@ -2004,3 +2004,30 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 
 ### User-visible Effect
 - Throughput can be tuned from SLURM env vars without editing Python.
+
+## Hardware Telemetry for 1h Profiling (2026-02-11)
+
+### Decision
+- Add explicit hardware/process telemetry logging inside the unified training SLURM pipeline.
+
+### Changed
+- `apptainer/train_instant_policy.slurm` now starts a background sampler that writes:
+  - host CPU utilization and RAM usage,
+  - GPU utilization/VRAM/power/temp (from `nvidia-smi`),
+  - trainer process RSS/%CPU,
+  - generator worker count + aggregate RSS/%CPU,
+  - periodic train ring task count.
+- generator shard logs now include unix timestamps per chunk line (`ts=<epoch>`), enabling exact first-hour throughput analysis.
+- Telemetry output path:
+  - `/scratch.global/$USER/ips/logs/ip_hw_<jobid>.csv`
+- Added env knobs:
+  - `TELEMETRY_INTERVAL_SEC` (default `30`)
+  - `TELEMETRY_TASK_COUNT_EVERY` (default `10` samples)
+- Cleanup trap now stops both generator workers and telemetry sampler.
+
+### Why
+- W&B/system metrics can be unavailable or incomplete during cluster runs.
+- We need deterministic 1-hour evidence to pick shard count and dataloader settings.
+
+### User-visible Effect
+- Every run now produces a machine-readable telemetry CSV usable for shard/throughput decisions.

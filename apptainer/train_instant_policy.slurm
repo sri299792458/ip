@@ -99,6 +99,10 @@ DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
 PCD_DTYPE=${PCD_DTYPE:-float16}
 
+# Profiling/telemetry settings (for 1h decision runs).
+TELEMETRY_INTERVAL_SEC=${TELEMETRY_INTERVAL_SEC:-30}
+TELEMETRY_TASK_COUNT_EVERY=${TELEMETRY_TASK_COUNT_EVERY:-10}
+
 # Parallel shard workers (continuous producer).
 ENABLE_PARALLEL_GENERATORS=${ENABLE_PARALLEL_GENERATORS:-1}
 GEN_NUM_SHARDS=${GEN_NUM_SHARDS:-4}
@@ -141,6 +145,117 @@ count_task_files() {
     return
   fi
   find "$d" -maxdepth 1 -type f -name 'task_*.pt' | wc -l | tr -d ' '
+}
+
+read_cpu_tot_idle() {
+  awk '/^cpu / {idle=$5+$6; total=0; for (i=2; i<=9; i++) total+=$i; print total, idle; exit}' /proc/stat
+}
+
+MONITOR_PID=""
+TRAINER_PID=""
+TELEMETRY_LOG_CSV=""
+start_system_monitor() {
+  TELEMETRY_LOG_CSV="$DATA_DIR/logs/ip_hw_${SLURM_JOB_ID:-manual}.csv"
+  cat > "$TELEMETRY_LOG_CSV" <<'EOF'
+ts_unix,elapsed_s,cpu_pct,mem_used_gb,mem_total_gb,gpu_util_pct,gpu_mem_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_power_w,gpu_temp_c,trainer_pid,trainer_rss_mb,trainer_cpu_pct,gen_alive,gen_rss_mb,gen_cpu_pct,train_tasks
+EOF
+
+  (
+    set +e
+    local start_now
+    start_now="$(date +%s)"
+    local sample_idx=0
+    local prev_total prev_idle
+    read -r prev_total prev_idle < <(read_cpu_tot_idle)
+
+    while true; do
+      sleep "$TELEMETRY_INTERVAL_SEC"
+      sample_idx=$((sample_idx + 1))
+
+      local now elapsed
+      now="$(date +%s)"
+      elapsed=$((now - start_now))
+
+      local total idle dt_total dt_idle cpu_pct
+      read -r total idle < <(read_cpu_tot_idle)
+      dt_total=$((total - prev_total))
+      dt_idle=$((idle - prev_idle))
+      if [ "$dt_total" -gt 0 ]; then
+        cpu_pct="$(awk -v t="$dt_total" -v i="$dt_idle" 'BEGIN {printf "%.2f", (100.0*(t-i))/t}')"
+      else
+        cpu_pct=""
+      fi
+      prev_total="$total"
+      prev_idle="$idle"
+
+      local mem_total_kb mem_avail_kb mem_used_kb mem_total_gb mem_used_gb
+      mem_total_kb="$(awk '/MemTotal:/ {print $2; exit}' /proc/meminfo)"
+      mem_avail_kb="$(awk '/MemAvailable:/ {print $2; exit}' /proc/meminfo)"
+      mem_used_kb=$((mem_total_kb - mem_avail_kb))
+      mem_total_gb="$(awk -v kb="$mem_total_kb" 'BEGIN {printf "%.2f", kb/1048576.0}')"
+      mem_used_gb="$(awk -v kb="$mem_used_kb" 'BEGIN {printf "%.2f", kb/1048576.0}')"
+
+      local gpu_line gpu_util gpu_mem_util gpu_mem_used gpu_mem_total gpu_power gpu_temp
+      gpu_line="$(nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d ' ')"
+      if [ -n "$gpu_line" ]; then
+        IFS=',' read -r gpu_util gpu_mem_util gpu_mem_used gpu_mem_total gpu_power gpu_temp <<< "$gpu_line"
+      else
+        gpu_util=""
+        gpu_mem_util=""
+        gpu_mem_used=""
+        gpu_mem_total=""
+        gpu_power=""
+        gpu_temp=""
+      fi
+
+      local trainer_pid trainer_rss_mb trainer_cpu_pct
+      trainer_pid=""
+      trainer_rss_mb=""
+      trainer_cpu_pct=""
+      if [ -n "${TRAINER_PID:-}" ] && kill -0 "$TRAINER_PID" 2>/dev/null; then
+        trainer_pid="$TRAINER_PID"
+        read -r trainer_rss_mb trainer_cpu_pct < <(
+          ps -p "$TRAINER_PID" -o rss=,%cpu= 2>/dev/null | awk 'NF {printf "%.2f %.2f\n", $1/1024.0, $2; exit}'
+        )
+      fi
+
+      local gen_alive gen_rss_mb gen_cpu_pct
+      gen_alive=0
+      gen_rss_mb=""
+      gen_cpu_pct=""
+      if [ "${#GEN_PIDS[@]}" -gt 0 ]; then
+        local gen_pid_csv
+        gen_pid_csv="$(IFS=,; echo "${GEN_PIDS[*]}")"
+        if [ -n "$gen_pid_csv" ]; then
+          gen_alive="$(ps -p "$gen_pid_csv" -o pid= 2>/dev/null | wc -l | tr -d ' ')"
+          read -r gen_rss_mb gen_cpu_pct < <(
+            ps -p "$gen_pid_csv" -o rss=,%cpu= 2>/dev/null | awk 'NF {rss+=$1; cpu+=$2} END {if (NR>0) printf "%.2f %.2f\n", rss/1024.0, cpu}'
+          )
+        fi
+      fi
+
+      local train_tasks
+      train_tasks=""
+      if [ $((sample_idx % TELEMETRY_TASK_COUNT_EVERY)) -eq 0 ]; then
+        train_tasks="$(count_task_files "$HOST_TRAIN_DIR")"
+      fi
+
+      printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
+        "$now" "$elapsed" "$cpu_pct" "$mem_used_gb" "$mem_total_gb" \
+        "$gpu_util" "$gpu_mem_util" "$gpu_mem_used" "$gpu_mem_total" "$gpu_power" "$gpu_temp" \
+        "$trainer_pid" "$trainer_rss_mb" "$trainer_cpu_pct" "$gen_alive" "$gen_rss_mb" "$gen_cpu_pct" "$train_tasks" \
+        >> "$TELEMETRY_LOG_CSV"
+    done
+  ) &
+  MONITOR_PID="$!"
+  echo "hardware telemetry log: $TELEMETRY_LOG_CSV (interval=${TELEMETRY_INTERVAL_SEC}s)"
+}
+
+stop_system_monitor() {
+  if [ -n "${MONITOR_PID:-}" ] && kill -0 "$MONITOR_PID" 2>/dev/null; then
+    kill "$MONITOR_PID" 2>/dev/null || true
+    wait "$MONITOR_PID" 2>/dev/null || true
+  fi
 }
 
 # Resolve ShapeNet path robustly.
@@ -314,7 +429,7 @@ while true; do
     --gripper_mesh_path \"$MESH_PATH\"
   TASK_START=\$((TASK_START + $GEN_CHUNK_TASKS))
   T1=\$(date +%s)
-  echo \"[shard $shard] chunk=$GEN_CHUNK_TASKS dt=\$((T1 - T0))s next_task_start=\$TASK_START\"
+  echo \"[shard $shard] ts=\$T1 chunk=$GEN_CHUNK_TASKS dt=\$((T1 - T0))s next_task_start=\$TASK_START\"
 done" >"$shard_log" 2>&1 &
 
     local gen_pid="$!"
@@ -331,8 +446,13 @@ stop_generators() {
   kill "${GEN_PIDS[@]}" 2>/dev/null || true
   wait "${GEN_PIDS[@]}" 2>/dev/null || true
 }
-trap stop_generators EXIT INT TERM
+cleanup_all() {
+  stop_generators
+  stop_system_monitor
+}
+trap cleanup_all EXIT INT TERM
 
+start_system_monitor
 start_generators
 
 SUBSAMPLE_ARGS=""
@@ -390,7 +510,18 @@ python /workspace/instant_policy/ip/train.py \
   $WANDB_ARGS \
   $ITER_OVERRIDE_ARGS \
   $SUBSAMPLE_ARGS \
-  $EXTRA_TRAIN_ARGS"
+  $EXTRA_TRAIN_ARGS" &
+TRAINER_PID="$!"
+
+train_rc=0
+if ! wait "$TRAINER_PID"; then
+  train_rc=$?
+fi
+TRAINER_PID=""
+if [ "$train_rc" -ne 0 ]; then
+  echo "ERROR: training process exited with code $train_rc"
+  exit "$train_rc"
+fi
 train_end_ts=$(date +%s)
 echo "Training wall time: $((train_end_ts - train_start_ts)) seconds"
 
