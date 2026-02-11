@@ -2189,6 +2189,25 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 - Train/val dataset initialization uses one consistent snapshot of file paths.
 - Eliminates “count>0 then no files found” inconsistency at startup.
 
+## Task Index Parser Fix (2026-02-11)
+
+### Decision
+- Fix malformed helper layout in `trajectory_dataset.py` that made `_task_index` return `None` for every file.
+
+### Changed
+- `ip/utils/trajectory_dataset.py`
+  - restored `_task_index` parsing block:
+    - extracts `task_<id>.pt` stem
+    - converts stem to integer id
+  - removed accidentally misplaced/unreachable parser block from `_subsample_pcd_worker_safe`.
+
+### Why
+- This bug caused all discovered `task_*.pt` paths to be discarded during indexing.
+- Result was false `No task_*.pt files found ...` errors even when files existed.
+
+### User-visible Effect
+- Dataset indexing now correctly recognizes task files and training proceeds.
+
 ## Resume/Env Robustness Fixes (2026-02-11)
 
 ### Decision

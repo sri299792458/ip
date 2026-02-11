@@ -14,6 +14,11 @@ def _task_index(path):
     name = os.path.basename(path)
     if not name.startswith("task_") or not name.endswith(".pt"):
         return None
+    stem = name.split("_", 1)[1].split(".", 1)[0]
+    try:
+        return int(stem)
+    except ValueError:
+        return None
 
 
 def _subsample_pcd_worker_safe(sample, num_points, rng):
@@ -29,11 +34,6 @@ def _subsample_pcd_worker_safe(sample, num_points, rng):
     replace = len(points) < num_points
     idx = rng.choice(len(points), size=num_points, replace=replace)
     return points[idx]
-    stem = name.split("_", 1)[1].split(".", 1)[0]
-    try:
-        return int(stem)
-    except ValueError:
-        return None
 
 
 class TrajectoryDataset(Dataset):
