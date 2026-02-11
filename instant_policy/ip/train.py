@@ -77,6 +77,21 @@ def _align_checkpoint_state_dict_for_model(ckpt_path: str, model: torch.nn.Modul
     return aligned_path
 
 
+def _debug_dataset_path(label: str, path: str, pattern: str, max_items: int = 20):
+    abs_path = os.path.abspath(path)
+    matches = sorted(glob(os.path.join(path, pattern)))
+    print(f"[PATH_DEBUG] {label} cwd={os.getcwd()}")
+    print(f"[PATH_DEBUG] {label} path={path} abs={abs_path} exists={os.path.isdir(path)}")
+    print(f"[PATH_DEBUG] {label} pattern={pattern} count={len(matches)} sample={matches[:max_items]}")
+
+    parent = os.path.dirname(path.rstrip(os.sep)) or os.sep
+    try:
+        parent_entries = sorted(os.listdir(parent))[:50]
+    except Exception as exc:
+        parent_entries = [f"<list-error: {exc}>"]
+    print(f"[PATH_DEBUG] {label} parent={parent} entries={parent_entries}")
+
+
 if __name__ == '__main__':
     # Prefer Tensor Core throughput on modern GPUs (A100, etc.).
     torch.set_float32_matmul_precision('high')
@@ -140,6 +155,7 @@ if __name__ == '__main__':
                         help='W&B resume policy when wandb logging is enabled.')
 
     args = parser.parse_args()
+    debug_paths = os.environ.get("IP_DEBUG_PATHS", "0") == "1"
 
     record = bool(args.record)
     use_wandb = bool(args.use_wandb)
@@ -234,6 +250,14 @@ if __name__ == '__main__':
     if data_format == 'trajectory':
         val_count = len(glob(os.path.join(data_path_val, 'task_*.pt')))
         train_count = len(glob(os.path.join(data_path_train, 'task_*.pt')))
+        if debug_paths or val_count == 0:
+            _debug_dataset_path("val", data_path_val, "task_*.pt")
+        if debug_paths or train_count == 0:
+            _debug_dataset_path("train", data_path_train, "task_*.pt")
+        if val_count == 0:
+            raise RuntimeError(f"No task_*.pt files found in {data_path_val}")
+        if train_count == 0:
+            raise RuntimeError(f"No task_*.pt files found in {data_path_train}")
         dset_val = TrajectoryDataset(
             data_path_val,
             num_samples=val_count,
@@ -263,6 +287,14 @@ if __name__ == '__main__':
     else:
         val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
         train_count = len(glob(os.path.join(data_path_train, 'data_*.pt')))
+        if debug_paths or val_count == 0:
+            _debug_dataset_path("val", data_path_val, "data_*.pt")
+        if debug_paths or train_count == 0:
+            _debug_dataset_path("train", data_path_train, "data_*.pt")
+        if val_count == 0:
+            raise RuntimeError(f"No data_*.pt files found in {data_path_val}")
+        if train_count == 0:
+            raise RuntimeError(f"No data_*.pt files found in {data_path_train}")
         dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0)
         dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
 

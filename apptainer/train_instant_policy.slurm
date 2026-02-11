@@ -119,6 +119,7 @@ VAL_FORCE_REBUILD=${VAL_FORCE_REBUILD:-0}
 VAL_NUM_TASKS=${VAL_NUM_TASKS:-100}
 VAL_TASK_START=${VAL_TASK_START:-200000000}
 VAL_SEED=${VAL_SEED:-424242}
+DEBUG_VAL_DIAGNOSTICS=${DEBUG_VAL_DIAGNOSTICS:-0}
 
 if [ ! -x "$RUNNER" ]; then
   echo "ERROR: runner not found or not executable: ${RUNNER:-<unset>}"
@@ -145,6 +146,46 @@ count_task_files() {
     return
   fi
   find "$d" -maxdepth 1 -type f -name 'task_*.pt' | wc -l | tr -d ' '
+}
+
+debug_val_diagnostics() {
+  local stage="$1"
+  if [ "$DEBUG_VAL_DIAGNOSTICS" != "1" ]; then
+    return
+  fi
+
+  echo "[VAL_DEBUG][$stage] DATA_DIR=$DATA_DIR"
+  echo "[VAL_DEBUG][$stage] HOST_VAL_DIR=$HOST_VAL_DIR"
+  echo "[VAL_DEBUG][$stage] VAL_DATA_DIR=$VAL_DATA_DIR"
+  if [ -d "$HOST_VAL_DIR" ]; then
+    local host_count
+    host_count="$(count_task_files "$HOST_VAL_DIR")"
+    echo "[VAL_DEBUG][$stage] host task_*.pt count=$host_count"
+    find "$HOST_VAL_DIR" -maxdepth 1 -type f -name 'task_*.pt' | sort | head -n 20
+  else
+    echo "[VAL_DEBUG][$stage] host val dir missing"
+  fi
+
+  local dbg_display dbg_vnc
+  dbg_display=$((DISPLAY_BASE + 99))
+  dbg_vnc=$((VNC_BASE + 99))
+  RLBENCH_DISPLAY=$dbg_display RLBENCH_VNC_PORT=$dbg_vnc "$RUNNER" "set -euo pipefail
+python - <<'PY'
+import glob, os
+p = \"$VAL_DATA_DIR\"
+matches = sorted(glob.glob(os.path.join(p, 'task_*.pt')))
+print('[VAL_DEBUG][$stage] container cwd=', os.getcwd())
+print('[VAL_DEBUG][$stage] container path=', p)
+print('[VAL_DEBUG][$stage] container exists=', os.path.isdir(p))
+print('[VAL_DEBUG][$stage] container count=', len(matches))
+print('[VAL_DEBUG][$stage] container sample=', matches[:20])
+parent = os.path.dirname(p.rstrip('/')) or '/'
+print('[VAL_DEBUG][$stage] container parent=', parent)
+try:
+    print('[VAL_DEBUG][$stage] container parent entries=', sorted(os.listdir(parent))[:50])
+except Exception as exc:
+    print('[VAL_DEBUG][$stage] container parent list error=', repr(exc))
+PY"
 }
 
 read_cpu_tot_idle() {
@@ -302,6 +343,9 @@ echo "compile_models=$COMPILE_MODELS devices=$TRAIN_DEVICES strategy=$TRAIN_STRA
 echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interval=$TRAIN_VAL_CHECK_INTERVAL"
 echo "ring_buffer_size=$TRAIN_BUFFER_SIZE min_bootstrap_tasks=$MIN_BOOTSTRAP_TASKS"
 echo "parallel_generators=$ENABLE_PARALLEL_GENERATORS num_shards=$GEN_NUM_SHARDS chunk_tasks=$GEN_CHUNK_TASKS"
+if [ "$DEBUG_VAL_DIAGNOSTICS" = "1" ]; then
+  echo "DEBUG_VAL_DIAGNOSTICS=1"
+fi
 if [ -n "$NUM_ITERS_OVERRIDE" ]; then
   echo "num_iters_override=$NUM_ITERS_OVERRIDE"
 fi
@@ -317,6 +361,7 @@ python -m ip.scripts.build_robotiq_mesh --out \"$MESH_PATH\" --source collision 
 fi
 
 # Build/rebuild validation set if needed.
+debug_val_diagnostics "before_val_build"
 VAL_COUNT="$(count_task_files "$HOST_VAL_DIR")"
 if [ "$VAL_FORCE_REBUILD" = "1" ]; then
   echo "VAL_FORCE_REBUILD=1, clearing validation tasks in $HOST_VAL_DIR"
@@ -339,6 +384,7 @@ python -m ip.scripts.generate_pseudo_demos \
   --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
   --gripper_mesh_path \"$MESH_PATH\""
 fi
+debug_val_diagnostics "after_val_build"
 
 # Minimal bootstrap only: enough to avoid empty train dataset.
 TRAIN_COUNT="$(count_task_files "$HOST_TRAIN_DIR")"
@@ -367,6 +413,7 @@ fi
 VAL_COUNT="$(count_task_files "$HOST_VAL_DIR")"
 TRAIN_COUNT="$(count_task_files "$HOST_TRAIN_DIR")"
 echo "val_tasks=$VAL_COUNT train_tasks=$TRAIN_COUNT"
+debug_val_diagnostics "before_train"
 if [ "$VAL_COUNT" -eq 0 ]; then
   echo "ERROR: validation set is empty at $HOST_VAL_DIR"
   exit 1
@@ -489,6 +536,7 @@ train_start_ts=$(date +%s)
 TRAIN_DISPLAY=${TRAIN_DISPLAY:-$DISPLAY_BASE}
 TRAIN_VNC_PORT=${TRAIN_VNC_PORT:-$VNC_BASE}
 RLBENCH_DISPLAY=$TRAIN_DISPLAY RLBENCH_VNC_PORT=$TRAIN_VNC_PORT "$RUNNER" "set -euo pipefail
+export IP_DEBUG_PATHS=$DEBUG_VAL_DIAGNOSTICS
 mkdir -p \"$SAVE_ROOT\"
 python /workspace/instant_policy/ip/train.py \
   --run_name \"$RUN_NAME\" \

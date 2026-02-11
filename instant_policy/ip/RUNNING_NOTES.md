@@ -2124,6 +2124,32 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### User-visible Effect
 - Resume works across compile/uncompile key format differences without manual checkpoint surgery.
 
+## Validation Path Debug Mode (2026-02-11)
+
+### Decision
+- Add a toggleable debug mode to trace host/container validation path visibility during SLURM runs.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - added `DEBUG_VAL_DIAGNOSTICS` env flag (`0/1`, default `0`).
+  - when enabled, logs host and container views of val path at:
+    - `before_val_build`
+    - `after_val_build`
+    - `before_train`
+  - passes `IP_DEBUG_PATHS` into `train.py`.
+- `ip/train.py`
+  - added path/glob diagnostics helper.
+  - prints cwd/path/glob count/parent entries when:
+    - `IP_DEBUG_PATHS=1`, or
+    - train/val glob count is zero.
+  - fails fast with explicit zero-file error before dataset construction.
+
+### Why
+- Intermittent val-empty failures require exact visibility into the path seen by each process.
+
+### User-visible Effect
+- One-flag debug run now pinpoints path/mount mismatches and race conditions quickly.
+
 ## Resume/Env Robustness Fixes (2026-02-11)
 
 ### Decision
