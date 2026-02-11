@@ -107,12 +107,21 @@ class DepthRenderer:
             return points, vis_color, vis_depth
         return points
 
-    def render_visual(self, scene, gripper_pose: np.ndarray, visual_idx: int):
+    def render_visual(
+        self,
+        scene,
+        gripper_pose: np.ndarray,
+        visual_idx: int,
+        extra_gripper_poses: Optional[List[np.ndarray]] = None,
+    ):
         pyr_scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0, 1.0], ambient_light=[0.5, 0.5, 0.5])
         for obj in scene.objects:
             mesh = self._get_mesh(obj.mesh, for_visual=True)
             pyr_scene.add(mesh, pose=obj.pose)
         pyr_scene.add(self.gripper_mesh_visual, pose=gripper_pose)
+        if extra_gripper_poses is not None:
+            for pose in extra_gripper_poses:
+                pyr_scene.add(self.gripper_mesh_visual, pose=pose)
         light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
         pyr_scene.add(light, pose=np.eye(4))
         cam = self.cameras[visual_idx]

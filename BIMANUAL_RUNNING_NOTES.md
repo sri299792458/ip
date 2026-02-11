@@ -175,3 +175,33 @@ Restart bimanual implementation from first principles with a strict frame contra
 
 ### Why
 - This is the minimal reusable set that captures bimanual interaction structure without per-task ad-hoc code.
+
+## Bimanual Pseudo Fidelity Parity (2026-02-11)
+
+### Decision
+Replace the earlier scaffold pseudo generator with a single-arm parity pipeline so bimanual pretraining uses the same core assumptions:
+- ShapeNet scenes from `SceneBuilder`,
+- canonicalized Robotiq 2F-85 mesh,
+- mesh capture-region attach on close transitions,
+- rendered world point cloud observation then fixed-size sampling.
+
+### Implemented
+- Rewrote `instant_policy/ip/generation_bimanual/generator.py` to:
+  - build scenes via `SceneBuilder`,
+  - load/canonicalize gripper mesh using the same 0.088 m policy-origin convention,
+  - estimate front jaw-capture region from the mesh,
+  - simulate dual-arm attach/detach over full trajectories,
+  - render observation point cloud from camera rig and emit `BimanualWorldBatch` samples.
+- Extended `instant_policy/ip/scripts/generate_bimanual_pseudo_demos.py` with required asset args:
+  - `--shapenet_path`, `--gripper_mesh_path`,
+  - optional `--shapenet_index_path`, mesh caching/index controls,
+  - optional render/video debug controls.
+- Updated bimanual generation README with the new contract and commands.
+- Added `DepthRenderer.render_visual(..., extra_gripper_poses=...)` so bimanual debug visuals can render both grippers.
+
+### Semantics Locked
+- Gripper labels stay `1=open`, `0=closed`.
+- Attach is evaluated only on open->closed transitions.
+- Targeted close only tests the targeted object index (no untargeted fallback).
+- Detach is immediate on closed->open.
+- If both arms contend for one object, the later successful close transition owns attachment.
