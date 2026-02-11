@@ -11,6 +11,26 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Attach Defaults Update (2026-02-10)
+
+### Decision
+Set pseudo-generation default attach gate to the tuned setting from sweep results.
+
+### Changed
+- `ip/generation/config.py`
+  - default `attach_radius` changed from `0.02` to `0.015`.
+  - `attach_capture_min_points` kept at `3`.
+- `ip/scripts/generate_pseudo_demos.py`
+  - CLI default `--attach_radius` changed to `0.015`.
+- `ip/generation/README.md`
+  - paper/default section updated to reflect `attach_radius=0.015` and `attach_capture_min_points=3`.
+
+### Why
+- Sweep ranking favored the smaller radius with moderate capture threshold as the best recall/permissiveness tradeoff.
+
+### User-visible Effect
+- Running pseudo generation without explicit attach args now uses `attach_radius=0.015` and `attach_capture_min_points=3`.
+
 ## Attach-Gate Tuning Metrics Upgrade (2026-02-10)
 
 ### Decision

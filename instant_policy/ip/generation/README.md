@@ -38,7 +38,7 @@ These are the defaults we treat as paper-canonical for pseudo generation:
 - gripper-noise `10%` (`gripper_noise_prob=0.1`)
 - Robotiq 2F-85 mesh required (`--gripper_mesh_path`)
 - attach on open->closed and detach on closed->open
-- attach gate uses distance (`attach_radius=0.02 m`) plus jaw-capture check
+- attach gate uses distance (`attach_radius=0.015 m`) plus jaw-capture check (`attach_capture_min_points=3`)
 - gripper mesh frame canonicalization to policy-origin frame (`z=0.088 m` from URDF base/flange frame)
 - three depth cameras rendered via PyRender (RLBench-style rig offsets + intrinsics, 128x128)
 - debug video rendering uses a separate high-res visual renderer (`640x640`) and does not change training observations

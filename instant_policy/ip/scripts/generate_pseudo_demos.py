@@ -93,7 +93,7 @@ def main():
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
-    parser.add_argument("--attach_radius", type=float, default=0.02)
+    parser.add_argument("--attach_radius", type=float, default=0.015)
     parser.add_argument(
         "--attach_capture_min_points",
         type=int,
