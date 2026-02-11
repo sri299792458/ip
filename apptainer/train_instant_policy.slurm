@@ -9,7 +9,7 @@
 #   /scratch.global/$USER/ips/logs/ip_gen_${SLURM_JOB_ID}_shard*.log
 #
 # Defaults are chosen for one clean pipeline (no offline full fill):
-# - Minimal bootstrap only
+# - Bootstrap ring to target item count (default: TRAIN_BUFFER_SIZE)
 # - Continuous sharded generation (single shard by default for 1-GPU runs)
 # - Ring buffer overwrite behavior via --buffer_size
 #SBATCH -A kdesingh
@@ -65,13 +65,9 @@ MODEL_NAME=${MODEL_NAME:-model.pt}
 SAVE_ROOT=${SAVE_ROOT:-/workspace/data/runs_policy}
 RUN_NAME=${RUN_NAME:-ring_train_${SLURM_JOB_ID:-manual}}
 
-# Training settings.
-DATA_FORMAT=${DATA_FORMAT:-steps}
+# Training settings (paper-aligned path only).
+DATA_FORMAT=steps
 BATCH_SIZE=${BATCH_SIZE:-16}
-NUM_POINTS=${NUM_POINTS:-2048}
-SUBSAMPLE_LIVE=${SUBSAMPLE_LIVE:-0}
-LIVE_SPACING_TRANS=${LIVE_SPACING_TRANS:-0.01}
-LIVE_SPACING_ROT=${LIVE_SPACING_ROT:-3.0}
 
 RECORD=${RECORD:-1}
 FINE_TUNE=${FINE_TUNE:-0}
@@ -83,10 +79,10 @@ WANDB_ID=${WANDB_ID:-}
 WANDB_RESUME=${WANDB_RESUME:-allow}
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
 NUM_ITERS_OVERRIDE=${NUM_ITERS_OVERRIDE:-}
-TRAIN_NUM_WORKERS=${TRAIN_NUM_WORKERS:-16}
+TRAIN_NUM_WORKERS=${TRAIN_NUM_WORKERS:-8}
 TRAIN_PERSISTENT_WORKERS=${TRAIN_PERSISTENT_WORKERS:-1}
 TRAIN_PREFETCH_FACTOR=${TRAIN_PREFETCH_FACTOR:-4}
-TRAIN_VAL_CHECK_INTERVAL=${TRAIN_VAL_CHECK_INTERVAL:-50000}
+TRAIN_VAL_CHECK_INTERVAL=${TRAIN_VAL_CHECK_INTERVAL:-20000}
 TRAIN_LOG_EVERY_N_STEPS=${TRAIN_LOG_EVERY_N_STEPS:-500}
 TRAIN_DEVICES=${TRAIN_DEVICES:-1}
 TRAIN_STRATEGY=${TRAIN_STRATEGY:-auto}
@@ -97,7 +93,7 @@ TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
 # - Old env used MIN_BOOTSTRAP_TASKS.
 # - New name reflects count of files in active DATA_FORMAT.
 MIN_BOOTSTRAP_TASKS=${MIN_BOOTSTRAP_TASKS:-512}
-MIN_BOOTSTRAP_ITEMS=${MIN_BOOTSTRAP_ITEMS:-$MIN_BOOTSTRAP_TASKS}
+MIN_BOOTSTRAP_ITEMS=${MIN_BOOTSTRAP_ITEMS:-$TRAIN_BUFFER_SIZE}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
@@ -114,7 +110,7 @@ GEN_CHUNK_TASKS=${GEN_CHUNK_TASKS:-256}
 GEN_TASK_START_BASE=${GEN_TASK_START_BASE:-1000000}
 GEN_TASK_START_STRIDE=${GEN_TASK_START_STRIDE:-100000000}
 GEN_SEED_STRIDE=${GEN_SEED_STRIDE:-1000003}
-GEN_FORCE_SOFTWARE_RENDERING=${GEN_FORCE_SOFTWARE_RENDERING:-1}
+GEN_FORCE_SOFTWARE_RENDERING=${GEN_FORCE_SOFTWARE_RENDERING:-0}
 DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
 VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
 
@@ -144,18 +140,8 @@ map_workspace_to_host() {
   fi
 }
 
-DATA_FILE_GLOB=""
-GEN_STORAGE_FORMAT=""
-if [ "$DATA_FORMAT" = "trajectory" ]; then
-  DATA_FILE_GLOB='task_*.pt'
-  GEN_STORAGE_FORMAT='trajectory'
-elif [ "$DATA_FORMAT" = "steps" ]; then
-  DATA_FILE_GLOB='data_*.pt'
-  GEN_STORAGE_FORMAT='steps'
-else
-  echo "ERROR: unsupported DATA_FORMAT=$DATA_FORMAT (expected: steps|trajectory)"
-  exit 1
-fi
+DATA_FILE_GLOB='data_*.pt'
+GEN_STORAGE_FORMAT='steps'
 
 count_data_files() {
   local d="$1"
@@ -408,30 +394,40 @@ debug_val_diagnostics "after_val_build"
 
 # Minimal bootstrap only: enough to avoid empty train dataset.
 TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
+if [ "$MIN_BOOTSTRAP_ITEMS" -gt "$TRAIN_BUFFER_SIZE" ]; then
+  echo "WARNING: MIN_BOOTSTRAP_ITEMS=$MIN_BOOTSTRAP_ITEMS exceeds TRAIN_BUFFER_SIZE=$TRAIN_BUFFER_SIZE; clamping."
+  MIN_BOOTSTRAP_ITEMS="$TRAIN_BUFFER_SIZE"
+fi
 if [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_ITEMS" ]; then
-  MISSING_ITEMS=$((MIN_BOOTSTRAP_ITEMS - TRAIN_COUNT))
-  BOOTSTRAP_TASKS=$MISSING_ITEMS
-  if [ "$BOOTSTRAP_TASKS" -lt 1 ]; then
-    BOOTSTRAP_TASKS=1
-  fi
-  echo "Bootstrapping train ring: current=$TRAIN_COUNT target=$MIN_BOOTSTRAP_ITEMS missing=$MISSING_ITEMS (num_tasks=$BOOTSTRAP_TASKS)"
-  "$RUNNER" "set -euo pipefail
+  echo "Bootstrapping train ring to target=$MIN_BOOTSTRAP_ITEMS from current=$TRAIN_COUNT"
+  BOOTSTRAP_ATTEMPT=0
+  while [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_ITEMS" ]; do
+    BOOTSTRAP_ATTEMPT=$((BOOTSTRAP_ATTEMPT + 1))
+    if [ "$BOOTSTRAP_ATTEMPT" -gt 8 ]; then
+      echo "ERROR: bootstrap did not reach target after $BOOTSTRAP_ATTEMPT attempts (current=$TRAIN_COUNT target=$MIN_BOOTSTRAP_ITEMS)."
+      exit 1
+    fi
+    "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
 python -m ip.scripts.generate_pseudo_demos \
   --shapenet_path \"$SHAPENET_PATH\" \
   --shapenet_index_path \"$INDEX_PATH\" \
   --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $BOOTSTRAP_TASKS \
+  --num_tasks $TRAIN_BUFFER_SIZE \
   --task_start $TRAIN_COUNT \
   --append \
   --seed $TRAIN_GEN_SEED \
   --storage_format $GEN_STORAGE_FORMAT \
   --pcd_storage_dtype $PCD_DTYPE \
-  --buffer_size $TRAIN_BUFFER_SIZE \
+  --buffer_size $MIN_BOOTSTRAP_ITEMS \
+  --fill_buffer \
   --num_shards 1 \
   --shard_id 0 \
   --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
   --gripper_mesh_path \"$MESH_PATH\""
+    TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
+    echo "  bootstrap attempt=$BOOTSTRAP_ATTEMPT train_items=$TRAIN_COUNT target=$MIN_BOOTSTRAP_ITEMS"
+  done
 fi
 
 VAL_COUNT="$(count_data_files "$HOST_VAL_DIR")"
@@ -526,11 +522,6 @@ trap cleanup_all EXIT INT TERM
 start_system_monitor
 start_generators
 
-SUBSAMPLE_ARGS=""
-if [ "$SUBSAMPLE_LIVE" = "1" ]; then
-  SUBSAMPLE_ARGS="--subsample_live --live_spacing_trans $LIVE_SPACING_TRANS --live_spacing_rot $LIVE_SPACING_ROT"
-fi
-
 ITER_OVERRIDE_ARGS=""
 if [ -n "$NUM_ITERS_OVERRIDE" ]; then
   ITER_OVERRIDE_ARGS="--num_iters_override $NUM_ITERS_OVERRIDE"
@@ -572,9 +563,7 @@ python /workspace/instant_policy/ip/train.py \
   --model_name \"$MODEL_NAME\" \
   --data_path_train \"$TRAIN_DATA_DIR\" \
   --data_path_val \"$VAL_DATA_DIR\" \
-  --data_format \"$DATA_FORMAT\" \
   --batch_size $BATCH_SIZE \
-  --num_points $NUM_POINTS \
   --num_workers $TRAIN_NUM_WORKERS \
   --persistent_workers $TRAIN_PERSISTENT_WORKERS \
   --prefetch_factor $TRAIN_PREFETCH_FACTOR \
@@ -586,7 +575,6 @@ python /workspace/instant_policy/ip/train.py \
   $RESUME_ARGS \
   $WANDB_ARGS \
   $ITER_OVERRIDE_ARGS \
-  $SUBSAMPLE_ARGS \
   $EXTRA_TRAIN_ARGS" &
 TRAINER_PID="$!"
 

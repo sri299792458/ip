@@ -49,8 +49,8 @@ sbatch train_instant_policy.slurm
 What this one job does:
 - ensures Robotiq mesh exists (`MESH_PATH`)
 - builds validation pseudo set if missing (`VAL_DATA_DIR`)
-- bootstraps train ring buffer if empty (`TRAIN_DATA_DIR`)
-- optionally refreshes ring buffer before train
+- bootstraps train ring buffer to target size (`TRAIN_DATA_DIR`)
+- runs continuous ring overwrite generation during training
 - starts training (or resumes) in the same job
 
 Resume across 24h jobs (same run name):
@@ -66,10 +66,10 @@ sbatch --export=ALL,RUN_NAME=my_run,RECORD=1,RESUME_CKPT=/workspace/data/runs_po
 ```
 
 Important defaults for training script:
-- ShapeNet path: `/workspace/data/ShapeNetCore.v2`
+- ShapeNet path: auto-resolved (`/workspace/data/shapenet` preferred, else `/workspace/data/ShapeNetCore.v2`)
 - train data: `/workspace/data/pseudo_ring/task_buffer`
 - val data: `/workspace/data/pseudo_ring/val`
-- format: `trajectory`
+- format: `steps` (`data_*.pt`)
 - model path: `/workspace/data/checkpoints`
 - W&B logging: enabled by default (`USE_WANDB=1`, `WANDB_MODE=online` unless overridden)
 
@@ -86,12 +86,13 @@ sbatch --export=ALL,NUM_ITERS_OVERRIDE=50000,RECORD=0,USE_WANDB=0 train_instant_
 ```
 
 Resume defaults:
-- fresh run default: `AUTO_RESUME=0`
-- resume run: set `AUTO_RESUME=1` (or pass explicit `RESUME_CKPT=...`)
+- default: `AUTO_RESUME=1` (starts fresh automatically when no checkpoint exists)
+- explicit resume: pass `RESUME_CKPT=...` (or keep `AUTO_RESUME=1` with same `RUN_NAME`)
 
 Core pseudo-data knobs:
 - `TRAIN_BUFFER_SIZE` (default `8192`)
-- `TRAIN_NUM_TASKS` (default `TRAIN_BUFFER_SIZE`; no `999999` default loop)
+- `MIN_BOOTSTRAP_ITEMS` (default `TRAIN_BUFFER_SIZE`)
+- `GEN_NUM_SHARDS` / `GEN_CHUNK_TASKS` (continuous producer parallelism)
 - `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `3/3`)
 - `PCD_DTYPE` (default `float16`)
 - `VAL_NUM_TASKS` (default `100`)

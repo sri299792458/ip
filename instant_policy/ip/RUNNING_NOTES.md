@@ -11,6 +11,79 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Single-GPU Paper-Parity Data Path Fix (2026-02-11)
+
+Note: superseded by **Paper-Only Training Path Cleanup (2026-02-11)** below. Kept here as historical context.
+
+### Decision
+Align the unified SLURM pipeline with paper-style continuous sample replacement on a single GPU:
+use `steps` format end-to-end by default, and avoid multi-shard generator contention by default.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - default `DATA_FORMAT` set to `steps` (was `trajectory`).
+  - generation `--storage_format` now follows `DATA_FORMAT` via a mode map:
+    - `steps -> data_*.pt`
+    - `trajectory -> task_*.pt`
+  - file counting/validation/bootstrap logic now uses mode-aware globbing (`data_*.pt` or `task_*.pt`) instead of hardcoded `task_*.pt`.
+  - added `MIN_BOOTSTRAP_ITEMS` (with backward-compatible alias from `MIN_BOOTSTRAP_TASKS`).
+  - default `GEN_NUM_SHARDS` set to `1` (single-GPU safe default).
+  - added `GEN_FORCE_SOFTWARE_RENDERING` (default `1`) for generator workers to reduce GPU contention with trainer.
+  - startup logs now print active file glob + storage format.
+  - telemetry CSV column renamed `train_tasks` -> `train_items` (mode-neutral naming).
+
+### Why
+- We had a mismatch where training mode and generation mode could diverge, and generation paths were effectively trajectory-oriented.
+- The trajectory path performs more per-sample reconstruction in the dataloader and can reduce `it/s` versus prebuilt sample files.
+- For single-GPU runs, defaulting to one generator shard avoids unnecessary contention.
+
+### User-visible Effect
+- Default one-command SLURM runs now follow the intended continuous sample-ring workflow.
+- Mode switches (`DATA_FORMAT=steps|trajectory`) are internally consistent across validation, bootstrap, and continuous generation.
+- Cleaner and more predictable single-GPU profiling behavior.
+
+## Paper-Only Training Path Cleanup (2026-02-11)
+
+### Decision
+Keep exactly one training data path aligned with the paper workflow:
+prebuilt step samples (`data_*.pt`) with continuous overwrite generation.
+
+### Changed
+- `ip/train.py`
+  - removed trajectory-training branch (`TrajectoryDataset`) and related CLI args:
+    - `--data_format`
+    - `--num_points`
+    - `--subsample_live`
+    - `--live_spacing_trans`
+    - `--live_spacing_rot`
+  - training now always loads `RunningDataset` from `data_*.pt`.
+- `apptainer/train_instant_policy.slurm`
+  - fixed training mode to `steps` only.
+  - removed mode-switch logic and trajectory/steps branching.
+  - fixed file counting/validation/bootstrap to `data_*.pt` only.
+  - generator storage fixed to `--storage_format steps`.
+  - removed passing removed train args (`--data_format`, `--num_points`, subsample flags).
+  - aligned key defaults to original author script:
+    - `TRAIN_NUM_WORKERS=8`
+    - `TRAIN_VAL_CHECK_INTERVAL=20000`
+    - `TRAIN_LOG_EVERY_N_STEPS=500` (unchanged, already aligned)
+  - bootstrap now uses ring-fill semantics for `steps` mode:
+    - target defaults to `MIN_BOOTSTRAP_ITEMS=TRAIN_BUFFER_SIZE`,
+    - uses `--buffer_size $MIN_BOOTSTRAP_ITEMS --fill_buffer`,
+    - re-counts after each attempt until target is reached (bounded retries).
+  - `GEN_FORCE_SOFTWARE_RENDERING` default set to `0` (opt-in only).
+- `apptainer/README_instant_policy.md`
+  - updated defaults to reflect `steps` format and current `AUTO_RESUME` behavior.
+
+### Why
+- Dual-path training logic added complexity and diverged from paper-style training behavior.
+- Keeping one canonical path reduces configuration mistakes and improves reproducibility.
+- In `steps` mode, mapping `missing files -> num_tasks` is invalid and can over-generate; ring-fill bootstrap is the correct control variable.
+
+### User-visible Effect
+- One clean training mode remains; SLURM + train script are now fully consistent.
+- Fewer CLI knobs, less accidental misconfiguration.
+
 ## Single-Arm Train Defaults Fix (2026-02-11)
 
 ### Decision

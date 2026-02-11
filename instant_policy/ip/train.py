@@ -5,7 +5,6 @@ import os
 import torch
 import tempfile
 from ip.utils.running_dataset import RunningDataset
-from ip.utils.trajectory_dataset import TrajectoryDataset
 from torch_geometric.data import DataLoader
 from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
@@ -119,16 +118,6 @@ if __name__ == '__main__':
                         help='Batch size for fine-tuning. When not fine-tuning, it is defined in the config')
     parser.add_argument('--data_path_val', type=str, default='./data/val',
                         help='Path to the validation data.')
-    parser.add_argument('--data_format', type=str, default='steps', choices=['steps', 'trajectory'],
-                        help='Dataset format: steps (data_*.pt) or trajectory (task_*.pt).')
-    parser.add_argument('--num_points', type=int, default=2048,
-                        help='Points per point cloud (trajectory format only).')
-    parser.add_argument('--subsample_live', action='store_true',
-                        help='Subsample live trajectories before sampling a step (trajectory format only).')
-    parser.add_argument('--live_spacing_trans', type=float, default=0.01,
-                        help='Translation spacing for subsample_live (trajectory format only).')
-    parser.add_argument('--live_spacing_rot', type=float, default=3.0,
-                        help='Rotation spacing (degrees) for subsample_live (trajectory format only).')
     parser.add_argument('--num_iters_override', type=int, default=None,
                         help='Optional override for total training steps (useful for throughput benchmarking).')
     parser.add_argument('--num_workers', type=int, default=8,
@@ -167,11 +156,6 @@ if __name__ == '__main__':
     model_name = args.model_name
     data_path_train = args.data_path_train
     data_path_val = args.data_path_val
-    data_format = args.data_format
-    num_points = args.num_points
-    subsample_live = args.subsample_live
-    live_spacing_trans = args.live_spacing_trans
-    live_spacing_rot = args.live_spacing_rot
     num_iters_override = args.num_iters_override
     num_workers = int(args.num_workers)
     persistent_workers = bool(args.persistent_workers)
@@ -247,63 +231,22 @@ if __name__ == '__main__':
         loader_kwargs['persistent_workers'] = persistent_workers
         loader_kwargs['prefetch_factor'] = prefetch_factor
 
-    if data_format == 'trajectory':
-        val_files = sorted(glob(os.path.join(data_path_val, 'task_*.pt')))
-        train_files = sorted(glob(os.path.join(data_path_train, 'task_*.pt')))
-        val_count = len(val_files)
-        train_count = len(train_files)
-        if debug_paths or val_count == 0:
-            _debug_dataset_path("val", data_path_val, "task_*.pt")
-        if debug_paths or train_count == 0:
-            _debug_dataset_path("train", data_path_train, "task_*.pt")
-        if val_count == 0:
-            raise RuntimeError(f"No task_*.pt files found in {data_path_val}")
-        if train_count == 0:
-            raise RuntimeError(f"No task_*.pt files found in {data_path_train}")
-        dset_val = TrajectoryDataset(
-            data_path_val,
-            task_files=val_files,
-            num_samples=val_count,
-            num_demos=cfg['num_demos'],
-            traj_horizon=cfg['traj_horizon'],
-            pred_horizon=cfg['pre_horizon'],
-            num_points=num_points,
-            rand_g_prob=0.0,
-            subsample_live=subsample_live,
-            live_spacing_trans=live_spacing_trans,
-            live_spacing_rot=live_spacing_rot,
-        )
-        dset = TrajectoryDataset(
-            data_path_train,
-            task_files=train_files,
-            num_samples=train_count,
-            num_demos=cfg['num_demos'],
-            traj_horizon=cfg['traj_horizon'],
-            pred_horizon=cfg['pre_horizon'],
-            num_points=num_points,
-            rand_g_prob=cfg['randomize_g_prob'],
-            subsample_live=subsample_live,
-            live_spacing_trans=live_spacing_trans,
-            live_spacing_rot=live_spacing_rot,
-        )
-        dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
-        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True, **loader_kwargs)
-    else:
-        val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
-        train_count = len(glob(os.path.join(data_path_train, 'data_*.pt')))
-        if debug_paths or val_count == 0:
-            _debug_dataset_path("val", data_path_val, "data_*.pt")
-        if debug_paths or train_count == 0:
-            _debug_dataset_path("train", data_path_train, "data_*.pt")
-        if val_count == 0:
-            raise RuntimeError(f"No data_*.pt files found in {data_path_val}")
-        if train_count == 0:
-            raise RuntimeError(f"No data_*.pt files found in {data_path_train}")
-        dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0)
-        dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
+    val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
+    train_count = len(glob(os.path.join(data_path_train, 'data_*.pt')))
+    if debug_paths or val_count == 0:
+        _debug_dataset_path("val", data_path_val, "data_*.pt")
+    if debug_paths or train_count == 0:
+        _debug_dataset_path("train", data_path_train, "data_*.pt")
+    if val_count == 0:
+        raise RuntimeError(f"No data_*.pt files found in {data_path_val}")
+    if train_count == 0:
+        raise RuntimeError(f"No data_*.pt files found in {data_path_train}")
 
-        dset = RunningDataset(data_path_train, train_count, rand_g_prob=cfg['randomize_g_prob'])
-        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True, **loader_kwargs)
+    dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0)
+    dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
+
+    dset = RunningDataset(data_path_train, train_count, rand_g_prob=cfg['randomize_g_prob'])
+    dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True, **loader_kwargs)
     ####################################################################################################################
     logger = None
     if record:
