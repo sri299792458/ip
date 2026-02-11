@@ -65,8 +65,8 @@ LIVE_SPACING_ROT=${LIVE_SPACING_ROT:-3.0}
 RECORD=${RECORD:-1}
 FINE_TUNE=${FINE_TUNE:-0}
 COMPILE_MODELS=${COMPILE_MODELS:-0}
-USE_WANDB=${USE_WANDB:-0}
-AUTO_RESUME=${AUTO_RESUME:-1}
+USE_WANDB=${USE_WANDB:-1}
+AUTO_RESUME=${AUTO_RESUME:-0}
 RESUME_CKPT=${RESUME_CKPT:-}
 WANDB_ID=${WANDB_ID:-}
 WANDB_RESUME=${WANDB_RESUME:-allow}
@@ -78,7 +78,9 @@ NUM_ITERS_OVERRIDE=${NUM_ITERS_OVERRIDE:-}
 BOOTSTRAP_IF_EMPTY=${BOOTSTRAP_IF_EMPTY:-1}
 BOOTSTRAP_FILL_BUFFER=${BOOTSTRAP_FILL_BUFFER:-1}
 TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
-TRAIN_NUM_TASKS=${TRAIN_NUM_TASKS:-999999}
+# Default bootstrap budget is bounded. With --fill_buffer enabled (default),
+# generation stops once the ring is filled.
+TRAIN_NUM_TASKS=${TRAIN_NUM_TASKS:-$TRAIN_BUFFER_SIZE}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
@@ -170,6 +172,14 @@ fi
 if [ -n "$RESUME_CKPT" ]; then
   echo "resume_ckpt=$RESUME_CKPT"
 fi
+echo "use_wandb=$USE_WANDB"
+echo "train_buffer_size=$TRAIN_BUFFER_SIZE train_num_tasks=$TRAIN_NUM_TASKS fill_buffer=$BOOTSTRAP_FILL_BUFFER"
+
+BOOTSTRAP_NUM_TASKS="$TRAIN_NUM_TASKS"
+if [ "$BOOTSTRAP_FILL_BUFFER" = "1" ] && [ "$BOOTSTRAP_NUM_TASKS" -lt "$TRAIN_BUFFER_SIZE" ]; then
+  echo "Adjusting TRAIN_NUM_TASKS to TRAIN_BUFFER_SIZE for fill_buffer bootstrap."
+  BOOTSTRAP_NUM_TASKS="$TRAIN_BUFFER_SIZE"
+fi
 
 # Ensure gripper mesh exists.
 if [ ! -f "$HOST_MESH_PATH" ]; then
@@ -216,7 +226,7 @@ python -m ip.scripts.generate_pseudo_demos \
   --shapenet_path \"$SHAPENET_PATH\" \
   --shapenet_index_path \"$INDEX_PATH\" \
   --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $TRAIN_NUM_TASKS \
+  --num_tasks $BOOTSTRAP_NUM_TASKS \
   --seed $TRAIN_GEN_SEED \
   --storage_format trajectory \
   --pcd_storage_dtype $PCD_DTYPE \
@@ -288,6 +298,9 @@ fi
 
 "$RUNNER" "set -euo pipefail
 mkdir -p \"$SAVE_ROOT\"
+if [ \"$USE_WANDB\" = \"1\" ]; then
+  export WANDB_MODE=\${WANDB_MODE:-online}
+fi
 python /workspace/instant_policy/ip/train.py \
   --run_name \"$RUN_NAME\" \
   --record $RECORD \

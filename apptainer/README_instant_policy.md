@@ -71,6 +71,7 @@ Important defaults for training script:
 - val data: `/workspace/data/pseudo_ring/val`
 - format: `trajectory`
 - model path: `/workspace/data/checkpoints`
+- W&B logging: enabled by default (`USE_WANDB=1`, `WANDB_MODE=online` unless overridden)
 
 You can override any script variable with `sbatch --export=ALL,KEY=VALUE,...`.
 
@@ -84,8 +85,13 @@ sbatch --export=ALL,VAL_FORCE_REBUILD=1,VAL_NUM_TASKS=300 train_instant_policy.s
 sbatch --export=ALL,NUM_ITERS_OVERRIDE=50000,RECORD=0,USE_WANDB=0 train_instant_policy.slurm
 ```
 
+Resume defaults:
+- fresh run default: `AUTO_RESUME=0`
+- resume run: set `AUTO_RESUME=1` (or pass explicit `RESUME_CKPT=...`)
+
 Core pseudo-data knobs:
 - `TRAIN_BUFFER_SIZE` (default `8192`)
+- `TRAIN_NUM_TASKS` (default `TRAIN_BUFFER_SIZE`; no `999999` default loop)
 - `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `3/3`)
 - `PCD_DTYPE` (default `float16`)
 - `VAL_NUM_TASKS` (default `100`)
@@ -101,6 +107,11 @@ The run script keeps the runtime CoppeliaSim path aligned with how PyRep was bui
 - Host env is isolated with `--cleanenv --no-home`.
 
 This avoids Bullet segfaults caused by path or library mismatches.
+
+W&B auth note:
+- The run scripts use `--no-home`, so host home is isolated.
+- If `~/.netrc` exists on host, the script now auto-binds it to `/workspace/data/.netrc`
+  so W&B login works inside container without extra steps.
 
 ## Environment Variables
 

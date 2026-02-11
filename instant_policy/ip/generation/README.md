@@ -183,7 +183,8 @@ Important:
 Recommended starting point for trajectory mode:
 - `buffer_size=8192`
 - `num_shards=1`
-- `num_tasks=999999` (single-worker continuous source)
+- if using `--fill_buffer`: set `num_tasks=buffer_size` (bounded one-pass fill)
+- if running as a continuous producer without `--fill_buffer`: large `num_tasks` is acceptable
 - in MSI usage, prefer `apptainer/train_instant_policy.slurm` which bootstraps/train in one flow
 
 `pcd_storage_dtype` guidance:

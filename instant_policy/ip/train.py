@@ -40,7 +40,7 @@ if __name__ == '__main__':
     parser.add_argument('--run_name', type=str, default='test', help='Name of the run.')
     parser.add_argument('--record', type=int, default=0,
                         help='Whether to log the training and save models [0, 1].')
-    parser.add_argument('--use_wandb', type=int, default=0,
+    parser.add_argument('--use_wandb', type=int, default=1,
                         help='Log training on weights and biases [0, 1]. You might need to log in to wandb.')
     parser.add_argument('--save_path', type=str, default='./runs',
                         help='Where the config and models will be saved.')

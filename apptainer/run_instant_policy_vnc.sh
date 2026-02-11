@@ -17,6 +17,8 @@ CONTAINER_IMAGE="${CONTAINER_IMAGE:-$SCRIPT_DIR/instant_policy.sif}"
 DISPLAY_NUM="${RLBENCH_DISPLAY:-1}"
 VNC_PORT="${RLBENCH_VNC_PORT:-5900}"
 ENABLE_VNC="${RLBENCH_ENABLE_VNC:-1}"
+HOST_NETRC="${HOME}/.netrc"
+NETRC_BIND=""
 
 # Canonicalize user-provided paths to avoid cwd-dependent behavior.
 if [ ! -d "$PROJECT_DIR" ]; then
@@ -42,6 +44,10 @@ DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
 
 if [[ "$CONTAINER_IMAGE" != /* ]]; then
     CONTAINER_IMAGE="$SCRIPT_DIR/$CONTAINER_IMAGE"
+fi
+
+if [ -f "$HOST_NETRC" ]; then
+    NETRC_BIND="--bind $HOST_NETRC:/workspace/data/.netrc"
 fi
 
 # Validation
@@ -107,6 +113,7 @@ CMD="${@:-bash}"
 # Run container (isolate from host env/home for stability)
 apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
     $BIND_LIBS \
+    $NETRC_BIND \
     --bind "$INSTANT_POLICY_DIR:/workspace/instant_policy" \
     --bind "$DATA_DIR:/workspace/data" \
     --pwd /workspace/instant_policy/ip \
@@ -123,6 +130,9 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         unset XDG_CONFIG_HOME
         mkdir -p /workspace/data/.cache/huggingface /workspace/data/.cache/matplotlib /workspace/data/.fluxbox \
             /workspace/data/.CoppeliaSim /workspace/data/.CoppeliaSim/system
+        if [ -f /workspace/data/.netrc ]; then
+            chmod 600 /workspace/data/.netrc || true
+        fi
 
         # Disable CoppeliaSim update popup (can block the sim)
         disable_updates() {

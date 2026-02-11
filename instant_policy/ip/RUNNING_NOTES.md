@@ -11,6 +11,37 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Single-Arm Train Defaults Fix (2026-02-11)
+
+### Decision
+Make online W&B logging the default for the unified single-arm SLURM pipeline and remove the misleading `999999` bootstrap default for pseudo generation.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - default `USE_WANDB` changed to `1`.
+  - default `AUTO_RESUME` changed to `0` (resume is now explicit/opt-in).
+  - train bootstrap default `TRAIN_NUM_TASKS` changed from `999999` to `TRAIN_BUFFER_SIZE`.
+  - added startup logging for `use_wandb`, `train_buffer_size`, `train_num_tasks`, `fill_buffer`.
+  - when `BOOTSTRAP_FILL_BUFFER=1` and `TRAIN_NUM_TASKS < TRAIN_BUFFER_SIZE`, auto-adjust bootstrap task budget to `TRAIN_BUFFER_SIZE`.
+  - exports `WANDB_MODE=online` by default when W&B is enabled (unless caller already set `WANDB_MODE`).
+- `ip/train.py`
+  - default `--use_wandb` changed to `1`.
+- `apptainer/run_instant_policy_vnc.sh`
+  - auto-binds host `~/.netrc` to `/workspace/data/.netrc` when present.
+  - ensures `/workspace/data/.netrc` permissions are tightened (`chmod 600`) at runtime.
+- `apptainer/README_instant_policy.md`
+  - updated defaults documentation for W&B and bootstrap task budget.
+
+### Why
+- Existing defaults silently disabled W&B online logging (`USE_WANDB=0`) even with valid credentials.
+- `AUTO_RESUME=1` can hard-fail fresh runs when no checkpoint exists yet.
+- With `--no-home`, host `~/.netrc` was not visible in-container unless explicitly bound.
+- `TRAIN_NUM_TASKS=999999` was only a sentinel for fill-buffer early exit, but progress logs looked like an unbounded generation run.
+
+### User-visible Effect
+- `sbatch apptainer/train_instant_policy.slurm` now logs to W&B online by default.
+- Bootstrap progress shows a bounded task budget by default instead of `999999`.
+
 ## Single SLURM Pipeline Cleanup (2026-02-11)
 
 ### Decision
