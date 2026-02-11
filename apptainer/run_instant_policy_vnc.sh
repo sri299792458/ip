@@ -127,7 +127,7 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         # Redirect caches and HOME to writable location
         export HOME=/workspace/data
         export XDG_CACHE_HOME=/workspace/data/.cache
-        export TRANSFORMERS_CACHE=/workspace/data/.cache/huggingface
+        unset TRANSFORMERS_CACHE
         export HF_HOME=/workspace/data/.cache/huggingface
         export MPLCONFIGDIR=/workspace/data/.cache/matplotlib
         # CoppeliaSim on Linux uses \$HOME/.CoppeliaSim/usrset.txt (or XDG_CONFIG_HOME if set).

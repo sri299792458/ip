@@ -2031,3 +2031,24 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 
 ### User-visible Effect
 - Every run now produces a machine-readable telemetry CSV usable for shard/throughput decisions.
+
+## Resume/Env Robustness Fixes (2026-02-11)
+
+### Decision
+- Prevent first-run crashes when `AUTO_RESUME=1` and no checkpoint exists.
+- Remove deprecated Transformers cache env usage.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`:
+  - `--auto_resume` is now passed only if `<save_root>/<run_name>` already contains a `.pt` checkpoint.
+  - otherwise logs a clear message and starts fresh.
+- `apptainer/run_instant_policy_vnc.sh`:
+  - removed `TRANSFORMERS_CACHE` export and uses `HF_HOME` only.
+
+### Why
+- New run names should not fail resume logic.
+- Avoid noisy deprecation warning from `transformers`.
+
+### User-visible Effect
+- First submission with a new `RUN_NAME` starts cleanly.
+- Re-submissions with existing checkpoints still auto-resume.

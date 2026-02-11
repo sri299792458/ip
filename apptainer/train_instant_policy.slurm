@@ -469,7 +469,12 @@ RESUME_ARGS=""
 if [ -n "$RESUME_CKPT" ]; then
   RESUME_ARGS="--resume_ckpt_path \"$RESUME_CKPT\""
 elif [ "$AUTO_RESUME" = "1" ]; then
-  RESUME_ARGS="--auto_resume"
+  HOST_RUN_DIR="$HOST_SAVE_ROOT/$RUN_NAME"
+  if [ -d "$HOST_RUN_DIR" ] && find "$HOST_RUN_DIR" -maxdepth 1 -type f -name '*.pt' | grep -q .; then
+    RESUME_ARGS="--auto_resume"
+  else
+    echo "AUTO_RESUME=1 but no checkpoint found in $HOST_RUN_DIR; starting fresh."
+  fi
 fi
 
 WANDB_ARGS=""
