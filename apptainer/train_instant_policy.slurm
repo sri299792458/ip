@@ -13,18 +13,15 @@
 
 set -euo pipefail
 
-if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
-  if [ -d "$SLURM_SUBMIT_DIR/apptainer" ]; then
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR/apptainer"
-  else
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR"
-  fi
-else
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-fi
+# Resolve from script location, not submit cwd, so `sbatch /abs/path/train_instant_policy.slurm`
+# works from any directory.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 RUNNER=${RUNNER:-$SCRIPT_DIR/run_instant_policy.sh}
 DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
+# Canonicalize DATA_DIR for stable host<->container path mapping.
+mkdir -p "$DATA_DIR"
+DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
 
 # Paths inside container.
 TRAIN_DATA_DIR=${TRAIN_DATA_DIR:-/workspace/data/pseudo_ring/task_buffer}
@@ -93,6 +90,31 @@ map_workspace_to_host() {
     printf "%s\n" "$p"
   fi
 }
+
+map_host_to_workspace() {
+  local p="$1"
+  if [[ "$p" == "$DATA_DIR" ]]; then
+    printf "/workspace/data\n"
+  elif [[ "$p" == "$DATA_DIR/"* ]]; then
+    printf "/workspace/data/%s\n" "${p#$DATA_DIR/}"
+  else
+    printf "%s\n" "$p"
+  fi
+}
+
+# Accept either host paths under DATA_DIR or container paths.
+TRAIN_DATA_DIR="$(map_host_to_workspace "$TRAIN_DATA_DIR")"
+VAL_DATA_DIR="$(map_host_to_workspace "$VAL_DATA_DIR")"
+if [ -n "$SHAPENET_PATH" ]; then
+  SHAPENET_PATH="$(map_host_to_workspace "$SHAPENET_PATH")"
+fi
+MESH_PATH="$(map_host_to_workspace "$MESH_PATH")"
+INDEX_PATH="$(map_host_to_workspace "$INDEX_PATH")"
+MODEL_PATH="$(map_host_to_workspace "$MODEL_PATH")"
+SAVE_ROOT="$(map_host_to_workspace "$SAVE_ROOT")"
+if [ -n "$RESUME_CKPT" ]; then
+  RESUME_CKPT="$(map_host_to_workspace "$RESUME_CKPT")"
+fi
 
 # Resolve ShapeNet path robustly to avoid folder-name mismatches.
 if [ -z "$SHAPENET_PATH" ]; then
