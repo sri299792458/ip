@@ -567,9 +567,7 @@ python /workspace/instant_policy/ip/train.py \
 TRAINER_PID="$!"
 
 train_rc=0
-if ! wait "$TRAINER_PID"; then
-  train_rc=$?
-fi
+wait "$TRAINER_PID" || train_rc=$?
 TRAINER_PID=""
 if [ "$train_rc" -ne 0 ]; then
   echo "ERROR: training process exited with code $train_rc"

@@ -2150,6 +2150,24 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### User-visible Effect
 - One-flag debug run now pinpoints path/mount mismatches and race conditions quickly.
 
+## Trainer Exit Code Fix (2026-02-11)
+
+### Decision
+- Fix train wrapper so failed trainer processes are never reported as successful.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - replaced:
+    - `if ! wait "$TRAINER_PID"; then train_rc=$?; fi`
+  - with:
+    - `wait "$TRAINER_PID" || train_rc=$?`
+
+### Why
+- The previous pattern captured the status of `!` (0) instead of `wait`'s non-zero code, masking failures.
+
+### User-visible Effect
+- If `train.py` fails (e.g., val path issue), SLURM job now exits non-zero and does not print false success.
+
 ## Resume/Env Robustness Fixes (2026-02-11)
 
 ### Decision
