@@ -29,7 +29,7 @@ Restart bimanual implementation from first principles with a strict frame contra
 2. **M1 (current)**: bimanual graph representation with local per-arm subgraphs + cross-arm edges.
 3. **M2 (current)**: bimanual model heads and diffusion wrapper (relative targets only).
 4. **M3 (current)**: dataset adapter with strict assertions on frame semantics.
-5. **M4**: training entrypoint + smoke tests.
+5. **M4 (current)**: training entrypoint + smoke tests.
 
 ### Non-Negotiables
 - Never feed broad raw `T_W_*` pose channels into model nodes.
@@ -85,3 +85,17 @@ Restart bimanual implementation from first principles with a strict frame contra
 ### Why
 - Locks the data path to first-principles relative semantics before adding diffusion training code.
 - Prevents accidental world-frame leakage at the dataset boundary.
+
+## M4 Training Scaffold Implemented (2026-02-11)
+
+### Changed
+- Added `instant_policy/ip/bimanual/diffusion.py`:
+  - `BimanualTrainingConfig`
+  - `BimanualGraphDiffusionScaffold` (Lightning module)
+  - converts world batches -> local obs + relative targets via `build_obs_targets`,
+  - supervises backbone predictions against relative deltas (`SE(3)->6D + grip`).
+- Exported scaffold symbols from `instant_policy/ip/bimanual/__init__.py`.
+
+### Why
+- Establishes an executable training bridge while keeping all supervision relative/local.
+- Lets us validate end-to-end data+model plumbing before adding full DDIM denoising loops.
