@@ -1926,6 +1926,29 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 - The initial sweep measured mostly easy-positive attach recall.
 - We extended tuning to include hard-negative probes at targeted close events (local-frame offsets around the close pose) and added `hard_negative_false_rate` to ranking.
 
+## Runner Collision Audit (2026-02-11)
+
+### Decision
+- Harden apptainer runner/process orchestration against cross-run interference and false kills.
+
+### Changed
+- `apptainer/run_instant_policy_vnc.sh`:
+  - replaced stale-process lookup with `pgrep -f` and removed global `fluxbox` kill pattern,
+  - changed stale cleanup to TERM then KILL (instead of immediate `kill -9`).
+- `apptainer/train_instant_policy.slurm`:
+  - fixed `GEN_NUM_SHARDS=0` behavior (now truly disables generator workers),
+  - made display/port allocation job-unique via `DISPLAY_BASE`/`VNC_BASE`,
+  - shard and trainer runners now get non-overlapping `RLBENCH_DISPLAY`/`RLBENCH_VNC_PORT`.
+- `apptainer/convert_peract.slurm`, `apptainer/generate_rlbench_data.slurm`, `apptainer/train_language.slurm`:
+  - set job-/array-scoped display and VNC port defaults to avoid collisions in concurrent jobs.
+
+### Why
+- Failures with `line 91 ... ps|awk ... Killed` and early `apptainer exec ... Killed` were consistent with runner-level process collisions, not model/runtime logic.
+
+### User-visible Effect
+- Concurrent container launches no longer fight over display `:1` by default.
+- `GEN_NUM_SHARDS=0` works as an actual disable switch.
+
 ## MSI Training Pipeline Rewrite (2026-02-11)
 
 ### Decision

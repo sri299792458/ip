@@ -106,6 +106,8 @@ GEN_CHUNK_TASKS=${GEN_CHUNK_TASKS:-256}
 GEN_TASK_START_BASE=${GEN_TASK_START_BASE:-1000000}
 GEN_TASK_START_STRIDE=${GEN_TASK_START_STRIDE:-100000000}
 GEN_SEED_STRIDE=${GEN_SEED_STRIDE:-1000003}
+DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
+VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
 
 # Validation set settings (fixed split for reproducibility).
 VAL_BUILD_IF_MISSING=${VAL_BUILD_IF_MISSING:-1}
@@ -260,14 +262,15 @@ if [ "$TRAIN_COUNT" -eq 0 ]; then
 fi
 
 ACTIVE_BUFFER_SIZE="$TRAIN_COUNT"
-GEN_WORKERS="$GEN_NUM_SHARDS"
-if [ "$GEN_WORKERS" -gt "$ACTIVE_BUFFER_SIZE" ]; then
-  GEN_WORKERS="$ACTIVE_BUFFER_SIZE"
+REQUESTED_GEN_WORKERS="$GEN_NUM_SHARDS"
+GEN_WORKERS=0
+if [ "$REQUESTED_GEN_WORKERS" -gt 0 ]; then
+  GEN_WORKERS="$REQUESTED_GEN_WORKERS"
+  if [ "$GEN_WORKERS" -gt "$ACTIVE_BUFFER_SIZE" ]; then
+    GEN_WORKERS="$ACTIVE_BUFFER_SIZE"
+  fi
 fi
-if [ "$GEN_WORKERS" -lt 1 ]; then
-  GEN_WORKERS=1
-fi
-echo "active_ring_size=$ACTIVE_BUFFER_SIZE gen_workers=$GEN_WORKERS"
+echo "active_ring_size=$ACTIVE_BUFFER_SIZE requested_gen_workers=$REQUESTED_GEN_WORKERS gen_workers=$GEN_WORKERS display_base=$DISPLAY_BASE"
 
 GEN_PIDS=()
 start_generators() {
@@ -287,7 +290,9 @@ start_generators() {
     local shard_task_start=$((GEN_TASK_START_BASE + shard * GEN_TASK_START_STRIDE))
     local shard_log="$DATA_DIR/logs/ip_gen_${SLURM_JOB_ID:-manual}_shard${shard}.log"
 
-    "$RUNNER" "set -euo pipefail
+    SHARD_DISPLAY=$((DISPLAY_BASE + 1 + shard))
+    SHARD_VNC_PORT=$((VNC_BASE + 1 + shard))
+    RLBENCH_DISPLAY=$SHARD_DISPLAY RLBENCH_VNC_PORT=$SHARD_VNC_PORT "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
 TASK_START=$shard_task_start
 while true; do
@@ -356,7 +361,9 @@ if [ "$USE_WANDB" = "1" ]; then
 fi
 
 train_start_ts=$(date +%s)
-"$RUNNER" "set -euo pipefail
+TRAIN_DISPLAY=${TRAIN_DISPLAY:-$DISPLAY_BASE}
+TRAIN_VNC_PORT=${TRAIN_VNC_PORT:-$VNC_BASE}
+RLBENCH_DISPLAY=$TRAIN_DISPLAY RLBENCH_VNC_PORT=$TRAIN_VNC_PORT "$RUNNER" "set -euo pipefail
 mkdir -p \"$SAVE_ROOT\"
 python /workspace/instant_policy/ip/train.py \
   --run_name \"$RUN_NAME\" \

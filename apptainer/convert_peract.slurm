@@ -113,6 +113,8 @@ if [ "$APPEND" = "1" ]; then
 fi
 
 export PROJECT_DIR INSTANT_POLICY_DIR DATA_DIR
+export RLBENCH_DISPLAY=${RLBENCH_DISPLAY:-$((400 + (${SLURM_JOB_ID:-0} % 200) + ${SLURM_ARRAY_TASK_ID:-0}))}
+export RLBENCH_VNC_PORT=${RLBENCH_VNC_PORT:-$((24000 + (${SLURM_JOB_ID:-0} % 10000) + ${SLURM_ARRAY_TASK_ID:-0}))}
 
 start=$(date +%s)
 echo "Starting conversion for $TASK on $(hostname)"

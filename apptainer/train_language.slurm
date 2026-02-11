@@ -67,6 +67,9 @@ if [ ! -x "$RUNNER" ]; then
   exit 1
 fi
 
+export RLBENCH_DISPLAY=${RLBENCH_DISPLAY:-$((350 + (${SLURM_JOB_ID:-0} % 200)))}
+export RLBENCH_VNC_PORT=${RLBENCH_VNC_PORT:-$((22000 + (${SLURM_JOB_ID:-0} % 10000)))}
+
 WANDB_ARGS=""
 if [ "$USE_WANDB" -eq 1 ]; then
   WANDB_ARGS="--use_wandb 1 --wandb_project \"$WANDB_PROJECT\" --wandb_run_name \"$WANDB_RUN_NAME\""

@@ -88,10 +88,15 @@ fi
 # Cleanup stale processes
 # ============================================
 cleanup_stale_processes() {
-    for pattern in "Xvfb :$DISPLAY_NUM" "x11vnc.*-rfbport $VNC_PORT" "fluxbox"; do
+    local pattern
+    for pattern in "^Xvfb :$DISPLAY_NUM( |$)" "x11vnc.*-rfbport $VNC_PORT"; do
         while IFS= read -r pid; do
-            [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
-        done < <(ps -u "$USER" -o pid= -o args= 2>/dev/null | awk "/$pattern/{print \$1}")
+            if [ -n "$pid" ] && [ "$pid" != "$$" ]; then
+                kill "$pid" 2>/dev/null || true
+                sleep 0.1
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done < <(pgrep -u "$USER" -f "$pattern" 2>/dev/null || true)
     done
     rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
 }
