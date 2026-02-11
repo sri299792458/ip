@@ -2168,6 +2168,27 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### User-visible Effect
 - If `train.py` fails (e.g., val path issue), SLURM job now exits non-zero and does not print false success.
 
+## Dataset File-List TOCTOU Fix (2026-02-11)
+
+### Decision
+- Avoid double-globbing task files between `train.py` and `TrajectoryDataset` initialization.
+
+### Changed
+- `ip/train.py`
+  - trajectory mode now resolves `val_files` and `train_files` once via `glob(...)`.
+  - passes those lists directly into dataset constructors.
+- `ip/utils/trajectory_dataset.py`
+  - added optional `task_files` argument.
+  - uses provided list instead of re-scanning filesystem.
+
+### Why
+- We observed cases where `train.py` saw non-empty `task_*.pt` counts, then `TrajectoryDataset` re-glob saw empty and failed.
+- This is a TOCTOU race on shared filesystems / concurrently mutating directories.
+
+### User-visible Effect
+- Train/val dataset initialization uses one consistent snapshot of file paths.
+- Eliminates “count>0 then no files found” inconsistency at startup.
+
 ## Resume/Env Robustness Fixes (2026-02-11)
 
 ### Decision

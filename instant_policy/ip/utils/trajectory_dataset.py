@@ -40,6 +40,7 @@ class TrajectoryDataset(Dataset):
     def __init__(
         self,
         data_path,
+        task_files=None,
         num_samples=None,
         num_demos=2,
         traj_horizon=10,
@@ -60,7 +61,7 @@ class TrajectoryDataset(Dataset):
         self.live_spacing_trans = live_spacing_trans
         self.live_spacing_rot = live_spacing_rot
 
-        files = glob(os.path.join(data_path, "task_*.pt"))
+        files = list(task_files) if task_files is not None else glob(os.path.join(data_path, "task_*.pt"))
         indexed = []
         for path in files:
             idx = _task_index(path)

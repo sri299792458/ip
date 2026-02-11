@@ -248,8 +248,10 @@ if __name__ == '__main__':
         loader_kwargs['prefetch_factor'] = prefetch_factor
 
     if data_format == 'trajectory':
-        val_count = len(glob(os.path.join(data_path_val, 'task_*.pt')))
-        train_count = len(glob(os.path.join(data_path_train, 'task_*.pt')))
+        val_files = sorted(glob(os.path.join(data_path_val, 'task_*.pt')))
+        train_files = sorted(glob(os.path.join(data_path_train, 'task_*.pt')))
+        val_count = len(val_files)
+        train_count = len(train_files)
         if debug_paths or val_count == 0:
             _debug_dataset_path("val", data_path_val, "task_*.pt")
         if debug_paths or train_count == 0:
@@ -260,6 +262,7 @@ if __name__ == '__main__':
             raise RuntimeError(f"No task_*.pt files found in {data_path_train}")
         dset_val = TrajectoryDataset(
             data_path_val,
+            task_files=val_files,
             num_samples=val_count,
             num_demos=cfg['num_demos'],
             traj_horizon=cfg['traj_horizon'],
@@ -272,6 +275,7 @@ if __name__ == '__main__':
         )
         dset = TrajectoryDataset(
             data_path_train,
+            task_files=train_files,
             num_samples=train_count,
             num_demos=cfg['num_demos'],
             traj_horizon=cfg['traj_horizon'],
