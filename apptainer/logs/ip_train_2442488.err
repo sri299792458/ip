@@ -1,0 +1,43 @@
+_XSERVTransmkdir: Owner of /tmp/.X11-unix should be set to root
+Using 16bit Automatic Mixed Precision (AMP)
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: Currently logged in as: srinivas299792458 (srinivas299792458-university-of-minnesota) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run u5rdvomz
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /workspace/data/runs_policy/profile_a100_4shards_1h/wandb/run-20260211_152906-u5rdvomz
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run profile_a100_4shards_1h
+wandb: ⭐️ View project at https://wandb.ai/srinivas299792458-university-of-minnesota/Instant%20Policy
+wandb: 🚀 View run at https://wandb.ai/srinivas299792458-university-of-minnesota/Instant%20Policy/runs/u5rdvomz
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+
+  | Name              | Type            | Params | Mode 
+--------------------------------------------------------------
+0 | model             | AGI             | 117 M  | train
+1 | graph_rep         | GraphRep        | 24.6 K | train
+2 | scene_encoder     | SceneEncoder    | 1.4 M  | train
+3 | local_encoder     | OptimizedModule | 28.9 M | train
+4 | cond_encoder      | OptimizedModule | 43.0 M | train
+5 | action_encoder    | OptimizedModule | 43.0 M | train
+6 | action_head_trans | OptimizedModule | 527 K  | train
+7 | action_head_rot   | OptimizedModule | 527 K  | train
+8 | action_head_grip  | OptimizedModule | 526 K  | train
+9 | loss_f            | L1Loss          | 0      | train
+--------------------------------------------------------------
+116 M     Trainable params
+1.4 M     Non-trainable params
+117 M     Total params
+471.543   Total estimated model params size (MB)
+356       Modules in train mode
+0         Modules in eval mode
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']
+skipping cudagraphs due to ['non-cuda device in graph']

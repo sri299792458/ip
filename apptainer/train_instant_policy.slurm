@@ -9,8 +9,8 @@
 #   /scratch.global/$USER/ips/logs/ip_gen_${SLURM_JOB_ID}_shard*.log
 #
 # Defaults are chosen for one clean pipeline (no offline full fill):
-# - Minimal bootstrap only (512 tasks)
-# - Continuous sharded generation (4 shards by default)
+# - Minimal bootstrap only
+# - Continuous sharded generation (single shard by default for 1-GPU runs)
 # - Ring buffer overwrite behavior via --buffer_size
 #SBATCH -A kdesingh
 #SBATCH -p msigpu
@@ -66,7 +66,7 @@ SAVE_ROOT=${SAVE_ROOT:-/workspace/data/runs_policy}
 RUN_NAME=${RUN_NAME:-ring_train_${SLURM_JOB_ID:-manual}}
 
 # Training settings.
-DATA_FORMAT=${DATA_FORMAT:-trajectory}
+DATA_FORMAT=${DATA_FORMAT:-steps}
 BATCH_SIZE=${BATCH_SIZE:-16}
 NUM_POINTS=${NUM_POINTS:-2048}
 SUBSAMPLE_LIVE=${SUBSAMPLE_LIVE:-0}
@@ -93,7 +93,11 @@ TRAIN_STRATEGY=${TRAIN_STRATEGY:-auto}
 
 # Ring/generation settings.
 TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
+# Backward-compatible alias:
+# - Old env used MIN_BOOTSTRAP_TASKS.
+# - New name reflects count of files in active DATA_FORMAT.
 MIN_BOOTSTRAP_TASKS=${MIN_BOOTSTRAP_TASKS:-512}
+MIN_BOOTSTRAP_ITEMS=${MIN_BOOTSTRAP_ITEMS:-$MIN_BOOTSTRAP_TASKS}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
@@ -105,11 +109,12 @@ TELEMETRY_TASK_COUNT_EVERY=${TELEMETRY_TASK_COUNT_EVERY:-10}
 
 # Parallel shard workers (continuous producer).
 ENABLE_PARALLEL_GENERATORS=${ENABLE_PARALLEL_GENERATORS:-1}
-GEN_NUM_SHARDS=${GEN_NUM_SHARDS:-4}
+GEN_NUM_SHARDS=${GEN_NUM_SHARDS:-1}
 GEN_CHUNK_TASKS=${GEN_CHUNK_TASKS:-256}
 GEN_TASK_START_BASE=${GEN_TASK_START_BASE:-1000000}
 GEN_TASK_START_STRIDE=${GEN_TASK_START_STRIDE:-100000000}
 GEN_SEED_STRIDE=${GEN_SEED_STRIDE:-1000003}
+GEN_FORCE_SOFTWARE_RENDERING=${GEN_FORCE_SOFTWARE_RENDERING:-1}
 DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
 VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
 
@@ -139,13 +144,26 @@ map_workspace_to_host() {
   fi
 }
 
-count_task_files() {
+DATA_FILE_GLOB=""
+GEN_STORAGE_FORMAT=""
+if [ "$DATA_FORMAT" = "trajectory" ]; then
+  DATA_FILE_GLOB='task_*.pt'
+  GEN_STORAGE_FORMAT='trajectory'
+elif [ "$DATA_FORMAT" = "steps" ]; then
+  DATA_FILE_GLOB='data_*.pt'
+  GEN_STORAGE_FORMAT='steps'
+else
+  echo "ERROR: unsupported DATA_FORMAT=$DATA_FORMAT (expected: steps|trajectory)"
+  exit 1
+fi
+
+count_data_files() {
   local d="$1"
   if [ ! -d "$d" ]; then
     echo 0
     return
   fi
-  find "$d" -maxdepth 1 -type f -name 'task_*.pt' | wc -l | tr -d ' '
+  find "$d" -maxdepth 1 -type f -name "$DATA_FILE_GLOB" | wc -l | tr -d ' '
 }
 
 debug_val_diagnostics() {
@@ -159,9 +177,9 @@ debug_val_diagnostics() {
   echo "[VAL_DEBUG][$stage] VAL_DATA_DIR=$VAL_DATA_DIR"
   if [ -d "$HOST_VAL_DIR" ]; then
     local host_count
-    host_count="$(count_task_files "$HOST_VAL_DIR")"
-    echo "[VAL_DEBUG][$stage] host task_*.pt count=$host_count"
-    find "$HOST_VAL_DIR" -maxdepth 1 -type f -name 'task_*.pt' | sort | head -n 20
+    host_count="$(count_data_files "$HOST_VAL_DIR")"
+    echo "[VAL_DEBUG][$stage] host ${DATA_FILE_GLOB} count=$host_count"
+    find "$HOST_VAL_DIR" -maxdepth 1 -type f -name "$DATA_FILE_GLOB" | sort | head -n 20
   else
     echo "[VAL_DEBUG][$stage] host val dir missing"
   fi
@@ -173,7 +191,8 @@ debug_val_diagnostics() {
 python - <<'PY'
 import glob, os
 p = \"$VAL_DATA_DIR\"
-matches = sorted(glob.glob(os.path.join(p, 'task_*.pt')))
+pattern = \"$DATA_FILE_GLOB\"
+matches = sorted(glob.glob(os.path.join(p, pattern)))
 print('[VAL_DEBUG][$stage] container cwd=', os.getcwd())
 print('[VAL_DEBUG][$stage] container path=', p)
 print('[VAL_DEBUG][$stage] container exists=', os.path.isdir(p))
@@ -198,7 +217,7 @@ TELEMETRY_LOG_CSV=""
 start_system_monitor() {
   TELEMETRY_LOG_CSV="$DATA_DIR/logs/ip_hw_${SLURM_JOB_ID:-manual}.csv"
   cat > "$TELEMETRY_LOG_CSV" <<'EOF'
-ts_unix,elapsed_s,cpu_pct,mem_used_gb,mem_total_gb,gpu_util_pct,gpu_mem_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_power_w,gpu_temp_c,trainer_pid,trainer_rss_mb,trainer_cpu_pct,gen_alive,gen_rss_mb,gen_cpu_pct,train_tasks
+ts_unix,elapsed_s,cpu_pct,mem_used_gb,mem_total_gb,gpu_util_pct,gpu_mem_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_power_w,gpu_temp_c,trainer_pid,trainer_rss_mb,trainer_cpu_pct,gen_alive,gen_rss_mb,gen_cpu_pct,train_items
 EOF
 
   (
@@ -275,16 +294,16 @@ EOF
         fi
       fi
 
-      local train_tasks
-      train_tasks=""
+      local train_items
+      train_items=""
       if [ $((sample_idx % TELEMETRY_TASK_COUNT_EVERY)) -eq 0 ]; then
-        train_tasks="$(count_task_files "$HOST_TRAIN_DIR")"
+        train_items="$(count_data_files "$HOST_TRAIN_DIR")"
       fi
 
       printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
         "$now" "$elapsed" "$cpu_pct" "$mem_used_gb" "$mem_total_gb" \
         "$gpu_util" "$gpu_mem_util" "$gpu_mem_used" "$gpu_mem_total" "$gpu_power" "$gpu_temp" \
-        "$trainer_pid" "$trainer_rss_mb" "$trainer_cpu_pct" "$gen_alive" "$gen_rss_mb" "$gen_cpu_pct" "$train_tasks" \
+        "$trainer_pid" "$trainer_rss_mb" "$trainer_cpu_pct" "$gen_alive" "$gen_rss_mb" "$gen_cpu_pct" "$train_items" \
         >> "$TELEMETRY_LOG_CSV"
     done
   ) &
@@ -341,8 +360,9 @@ echo "shapenet_path=$SHAPENET_PATH (host: $HOST_SHAPENET)"
 echo "auto_resume=$AUTO_RESUME use_wandb=$USE_WANDB"
 echo "compile_models=$COMPILE_MODELS devices=$TRAIN_DEVICES strategy=$TRAIN_STRATEGY"
 echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interval=$TRAIN_VAL_CHECK_INTERVAL"
-echo "ring_buffer_size=$TRAIN_BUFFER_SIZE min_bootstrap_tasks=$MIN_BOOTSTRAP_TASKS"
+echo "ring_buffer_size=$TRAIN_BUFFER_SIZE min_bootstrap_items=$MIN_BOOTSTRAP_ITEMS"
 echo "parallel_generators=$ENABLE_PARALLEL_GENERATORS num_shards=$GEN_NUM_SHARDS chunk_tasks=$GEN_CHUNK_TASKS"
+echo "data_file_glob=$DATA_FILE_GLOB storage_format=$GEN_STORAGE_FORMAT gen_force_software=$GEN_FORCE_SOFTWARE_RENDERING"
 if [ "$DEBUG_VAL_DIAGNOSTICS" = "1" ]; then
   echo "DEBUG_VAL_DIAGNOSTICS=1"
 fi
@@ -362,10 +382,10 @@ fi
 
 # Build/rebuild validation set if needed.
 debug_val_diagnostics "before_val_build"
-VAL_COUNT="$(count_task_files "$HOST_VAL_DIR")"
+VAL_COUNT="$(count_data_files "$HOST_VAL_DIR")"
 if [ "$VAL_FORCE_REBUILD" = "1" ]; then
-  echo "VAL_FORCE_REBUILD=1, clearing validation tasks in $HOST_VAL_DIR"
-  find "$HOST_VAL_DIR" -maxdepth 1 -type f -name 'task_*.pt' -delete
+  echo "VAL_FORCE_REBUILD=1, clearing validation files (${DATA_FILE_GLOB}) in $HOST_VAL_DIR"
+  find "$HOST_VAL_DIR" -maxdepth 1 -type f -name "$DATA_FILE_GLOB" -delete
   VAL_COUNT=0
 fi
 if [ "$VAL_BUILD_IF_MISSING" = "1" ] && [ "$VAL_COUNT" -eq 0 ]; then
@@ -379,7 +399,7 @@ python -m ip.scripts.generate_pseudo_demos \
   --num_tasks $VAL_NUM_TASKS \
   --task_start $VAL_TASK_START \
   --seed $VAL_SEED \
-  --storage_format trajectory \
+  --storage_format $GEN_STORAGE_FORMAT \
   --pcd_storage_dtype $PCD_DTYPE \
   --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
   --gripper_mesh_path \"$MESH_PATH\""
@@ -387,21 +407,25 @@ fi
 debug_val_diagnostics "after_val_build"
 
 # Minimal bootstrap only: enough to avoid empty train dataset.
-TRAIN_COUNT="$(count_task_files "$HOST_TRAIN_DIR")"
-if [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_TASKS" ]; then
-  MISSING_TASKS=$((MIN_BOOTSTRAP_TASKS - TRAIN_COUNT))
-  echo "Bootstrapping train ring: current=$TRAIN_COUNT target=$MIN_BOOTSTRAP_TASKS missing=$MISSING_TASKS"
+TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
+if [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_ITEMS" ]; then
+  MISSING_ITEMS=$((MIN_BOOTSTRAP_ITEMS - TRAIN_COUNT))
+  BOOTSTRAP_TASKS=$MISSING_ITEMS
+  if [ "$BOOTSTRAP_TASKS" -lt 1 ]; then
+    BOOTSTRAP_TASKS=1
+  fi
+  echo "Bootstrapping train ring: current=$TRAIN_COUNT target=$MIN_BOOTSTRAP_ITEMS missing=$MISSING_ITEMS (num_tasks=$BOOTSTRAP_TASKS)"
   "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
 python -m ip.scripts.generate_pseudo_demos \
   --shapenet_path \"$SHAPENET_PATH\" \
   --shapenet_index_path \"$INDEX_PATH\" \
   --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $MISSING_TASKS \
+  --num_tasks $BOOTSTRAP_TASKS \
   --task_start $TRAIN_COUNT \
   --append \
   --seed $TRAIN_GEN_SEED \
-  --storage_format trajectory \
+  --storage_format $GEN_STORAGE_FORMAT \
   --pcd_storage_dtype $PCD_DTYPE \
   --buffer_size $TRAIN_BUFFER_SIZE \
   --num_shards 1 \
@@ -410,9 +434,9 @@ python -m ip.scripts.generate_pseudo_demos \
   --gripper_mesh_path \"$MESH_PATH\""
 fi
 
-VAL_COUNT="$(count_task_files "$HOST_VAL_DIR")"
-TRAIN_COUNT="$(count_task_files "$HOST_TRAIN_DIR")"
-echo "val_tasks=$VAL_COUNT train_tasks=$TRAIN_COUNT"
+VAL_COUNT="$(count_data_files "$HOST_VAL_DIR")"
+TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
+echo "val_items=$VAL_COUNT train_items=$TRAIN_COUNT"
 debug_val_diagnostics "before_train"
 if [ "$VAL_COUNT" -eq 0 ]; then
   echo "ERROR: validation set is empty at $HOST_VAL_DIR"
@@ -454,7 +478,7 @@ start_generators() {
 
     SHARD_DISPLAY=$((DISPLAY_BASE + 1 + shard))
     SHARD_VNC_PORT=$((VNC_BASE + 1 + shard))
-    RLBENCH_DISPLAY=$SHARD_DISPLAY RLBENCH_VNC_PORT=$SHARD_VNC_PORT "$RUNNER" "set -euo pipefail
+    RLBENCH_DISPLAY=$SHARD_DISPLAY RLBENCH_VNC_PORT=$SHARD_VNC_PORT FORCE_SOFTWARE_RENDERING=$GEN_FORCE_SOFTWARE_RENDERING "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
 TASK_START=$shard_task_start
 while true; do
@@ -467,7 +491,7 @@ while true; do
     --task_start \$TASK_START \
     --append \
     --seed $shard_seed \
-    --storage_format trajectory \
+    --storage_format $GEN_STORAGE_FORMAT \
     --pcd_storage_dtype $PCD_DTYPE \
     --buffer_size $ACTIVE_BUFFER_SIZE \
     --num_shards $GEN_WORKERS \
