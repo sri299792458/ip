@@ -111,3 +111,20 @@ Restart bimanual implementation from first principles with a strict frame contra
 
 ### Why
 - Gives a one-command sanity check for the reboot stack on any environment with the `ip` package installed.
+
+## DDIM Upgrade (2026-02-11)
+
+### Changed
+- Replaced the previous training scaffold in `instant_policy/ip/bimanual/diffusion.py` with a full dual-arm DDIM adaptation:
+  - diffusion noise injection for left/right relative actions + gripper states,
+  - per-arm Instant-Policy-style label construction via `get_labels(...)`,
+  - iterative denoising loop for inference (`test_step`) with rigid keypoint fit updates,
+  - per-arm normalizers and optimizer scheduler parity with original Instant Policy.
+- Upgraded `instant_policy/ip/bimanual/model.py` for DDIM compatibility:
+  - per-node outputs `[B, P, G, 7]`,
+  - diffusion timestep conditioning,
+  - `get_transformed_node_pos(...)` and `get_labels(...)` helpers.
+- Exported `BimanualGraphDiffusion` in `instant_policy/ip/bimanual/__init__.py`.
+
+### Why
+- Aligns bimanual training/inference mechanics with the proven single-arm Instant Policy DDIM path while preserving the local/relative bimanual data contract.

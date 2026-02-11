@@ -22,7 +22,11 @@ from .frame_ops import (
 from .graph_rep import BimanualGraphConfig, BimanualGraphRep
 from .model import BimanualBackbone, BimanualModelConfig
 from .data_adapter import BimanualWorldBatch, build_obs_targets, relabel_world
-from .diffusion import BimanualGraphDiffusionScaffold, BimanualTrainingConfig
+from .diffusion import (
+    BimanualGraphDiffusion,
+    BimanualGraphDiffusionScaffold,
+    BimanualTrainingConfig,
+)
 
 __all__ = [
     "BimanualObservation",
@@ -41,6 +45,7 @@ __all__ = [
     "BimanualWorldBatch",
     "build_obs_targets",
     "relabel_world",
+    "BimanualGraphDiffusion",
     "BimanualGraphDiffusionScaffold",
     "BimanualTrainingConfig",
 ]

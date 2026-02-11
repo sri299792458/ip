@@ -76,7 +76,14 @@ def main():
         ),
     )
 
-    trainer_mod = BimanualGraphDiffusionScaffold(backbone, BimanualTrainingConfig())
+    trainer_mod = BimanualGraphDiffusionScaffold(
+        backbone,
+        BimanualTrainingConfig(
+            pred_horizon=args.horizon,
+            num_diffusion_iters_train=32,
+            num_diffusion_iters_test=4,
+        ),
+    )
     trainer_mod.to(device)
 
     with torch.no_grad():
