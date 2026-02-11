@@ -113,6 +113,10 @@ class SceneBuilder:
             raise RuntimeError(f"Unsupported mesh type: {type(mesh)} for {mesh_path}")
         if mesh.vertices.size == 0:
             raise RuntimeError(f"Empty mesh: {mesh_path}")
+        # Pseudo generation only needs geometry (point clouds), not texture fidelity.
+        # Force plain-color visuals to avoid sporadic pyrender shader variants that
+        # depend on UV attributes (can fail on malformed/incomplete ShapeNet assets).
+        self._force_plain_visual(mesh)
         mesh.remove_unreferenced_vertices()
         center = mesh.bounding_box.centroid
         mesh.apply_translation(-center)
@@ -122,6 +126,18 @@ class SceneBuilder:
             raise RuntimeError(f"Degenerate mesh: {mesh_path}")
         mesh.apply_scale(1.0 / max_extent)
         return mesh
+
+    @staticmethod
+    def _force_plain_visual(mesh: trimesh.Trimesh):
+        rgba = np.array([180, 180, 180, 255], dtype=np.uint8)
+        if len(mesh.faces) > 0:
+            face_colors = np.repeat(rgba[None, :], len(mesh.faces), axis=0)
+            mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, face_colors=face_colors)
+        elif len(mesh.vertices) > 0:
+            vertex_colors = np.repeat(rgba[None, :], len(mesh.vertices), axis=0)
+            mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, vertex_colors=vertex_colors)
+        else:
+            mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh)
 
     def _get_mesh(self, mesh_path: str):
         if self.cache_meshes:

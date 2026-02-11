@@ -21,6 +21,7 @@ Make online W&B logging the default for the unified single-arm SLURM pipeline an
   - default `USE_WANDB` changed to `1`.
   - default `AUTO_RESUME` changed to `0` (resume is now explicit/opt-in).
   - train bootstrap default `TRAIN_NUM_TASKS` changed from `999999` to `TRAIN_BUFFER_SIZE`.
+  - if ring buffer exists but is partially filled and `BOOTSTRAP_FILL_BUFFER=1`, bootstrap now auto top-ups with `--append --fill_buffer` until wrap.
   - added startup logging for `use_wandb`, `train_buffer_size`, `train_num_tasks`, `fill_buffer`.
   - when `BOOTSTRAP_FILL_BUFFER=1` and `TRAIN_NUM_TASKS < TRAIN_BUFFER_SIZE`, auto-adjust bootstrap task budget to `TRAIN_BUFFER_SIZE`.
   - exports `WANDB_MODE=online` by default when W&B is enabled (unless caller already set `WANDB_MODE`).
@@ -41,6 +42,25 @@ Make online W&B logging the default for the unified single-arm SLURM pipeline an
 ### User-visible Effect
 - `sbatch apptainer/train_instant_policy.slurm` now logs to W&B online by default.
 - Bootstrap progress shows a bounded task budget by default instead of `999999`.
+
+## Pseudo Render UV Shader Crash Fix (2026-02-11)
+
+### Decision
+Make pseudo-generation mesh rendering texture-agnostic by forcing plain-color visuals at mesh load time.
+
+### Changed
+- `ip/generation/scene_builder.py`
+  - added `_force_plain_visual(...)` to convert loaded meshes to `ColorVisuals`.
+  - call this conversion in `_load_mesh_base(...)` before normalization/scaling.
+
+### Why
+- Some ShapeNet assets include partial/broken texture metadata.
+- Pyrender can compile a shader variant that references `uv_0` without the matching varying, causing a hard crash:
+  `Shader compile failure ... undefined variable "uv_0"`.
+- Pseudo training uses geometry only, so dropping texture fidelity is correct and safer.
+
+### User-visible Effect
+- Pseudo generation no longer dies mid-run from `uv_0` shader compile failures on problematic meshes.
 
 ## Single SLURM Pipeline Cleanup (2026-02-11)
 

@@ -212,11 +212,25 @@ python -m ip.scripts.generate_pseudo_demos \
   --gripper_mesh_path \"$MESH_PATH\""
 fi
 
-# Bootstrap train ring buffer if empty.
+# Bootstrap train ring buffer if empty, or top-up if partially filled.
 TRAIN_COUNT="$(count_task_files "$HOST_TRAIN_DIR")"
-if [ "$BOOTSTRAP_IF_EMPTY" = "1" ] && [ "$TRAIN_COUNT" -eq 0 ]; then
-  echo "Training buffer empty, bootstrapping..."
+BOOT_MODE=""
+if [ "$BOOTSTRAP_IF_EMPTY" = "1" ]; then
+  if [ "$TRAIN_COUNT" -eq 0 ]; then
+    BOOT_MODE="empty"
+  elif [ "$BOOTSTRAP_FILL_BUFFER" = "1" ] && [ "$TRAIN_COUNT" -lt "$TRAIN_BUFFER_SIZE" ]; then
+    BOOT_MODE="topup"
+  fi
+fi
+if [ -n "$BOOT_MODE" ]; then
   EXTRA_BOOT_FLAGS=""
+  APPEND_BOOT_FLAG=""
+  if [ "$BOOT_MODE" = "empty" ]; then
+    echo "Training buffer empty, bootstrapping..."
+  else
+    echo "Training buffer partially filled ($TRAIN_COUNT/$TRAIN_BUFFER_SIZE), topping up..."
+    APPEND_BOOT_FLAG="--append"
+  fi
   if [ "$BOOTSTRAP_FILL_BUFFER" = "1" ]; then
     EXTRA_BOOT_FLAGS="$EXTRA_BOOT_FLAGS --fill_buffer"
   fi
@@ -235,6 +249,7 @@ python -m ip.scripts.generate_pseudo_demos \
   --shard_id 0 \
   --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
   --gripper_mesh_path \"$MESH_PATH\" \
+  $APPEND_BOOT_FLAG \
   $EXTRA_BOOT_FLAGS"
 fi
 
