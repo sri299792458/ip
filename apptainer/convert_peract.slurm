@@ -41,8 +41,16 @@ resolve_runner() {
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTANT_POLICY_DIR=${INSTANT_POLICY_DIR:-$REPO_ROOT/instant_policy}
 PROJECT_DIR=${PROJECT_DIR:-$REPO_ROOT}
-DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
+DATA_DIR=${DATA_DIR:-}
 RUNNER="$(resolve_runner || true)"
+
+if [ -z "${DATA_DIR:-}" ]; then
+  if [ -d "/scratch.global/$USER/ip" ]; then
+    DATA_DIR="/scratch.global/$USER/ip"
+  else
+    DATA_DIR="/scratch.global/$USER/ips"
+  fi
+fi
 
 NUM_DEMOS=${NUM_DEMOS:-2}
 NUM_WAYPOINTS=${NUM_WAYPOINTS:-10}

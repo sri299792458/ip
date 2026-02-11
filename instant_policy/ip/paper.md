@@ -8,6 +8,9 @@ Purpose: keep the key paper constants/claims locally in-repo so implementation d
   - `instant_policy/docs/papers/instant_policy/2411.12633v2.pdf`
   - `instant_policy/docs/papers/instant_policy/2411.12633v2.layout.txt`
   - `instant_policy/docs/papers/instant_policy/2411.12633v2.txt`
+  - `instant_policy/docs/papers/instant_policy/instant_policy_bimanual.pdf`
+  - `instant_policy/docs/papers/instant_policy/instant_policy_bimanual.layout.txt`
+  - `instant_policy/docs/papers/instant_policy/instant_policy_bimanual.txt`
 - arXiv abstract page: https://arxiv.org/abs/2411.12633
 - arXiv PDF (latest version): https://arxiv.org/pdf/2411.12633
 - ar5iv HTML (easy to search): https://ar5iv.org/html/2411.12633
@@ -41,3 +44,6 @@ Purpose: keep the key paper constants/claims locally in-repo so implementation d
 
 - Ring buffer size is an implementation choice (paper requires continuous replacement, not a fixed numeric size).
 - For trajectory storage, `BUFFER_SIZE` means number of `task_*.pt` files (tasks), not timestep samples.
+- Paper-reported runtime anchor for single-arm model:
+  - `2.5M` optimisation steps + `50K` cooldown in ~`5 days` on one `RTX 3080 Ti`.
+  - Pseudo-demonstrations are continuously generated in parallel and old samples are replaced.

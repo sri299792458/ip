@@ -1,10 +1,21 @@
 #!/bin/bash
-# Single entrypoint for MSI: bootstrap pseudo data (if needed) + train/resume.
+# Unified MSI entrypoint:
+# 1) Ensure val set + minimal train bootstrap
+# 2) Start sharded continuous pseudo-demo generation in background
+# 3) Run training (resume-friendly across 24h jobs)
+#
 # Re-submit this same script for each 24h window.
+# Generator shard logs are written to:
+#   /scratch.global/$USER/ips/logs/ip_gen_${SLURM_JOB_ID}_shard*.log
+#
+# Defaults are chosen for one clean pipeline (no offline full fill):
+# - Minimal bootstrap only (512 tasks)
+# - Continuous sharded generation (4 shards by default)
+# - Ring buffer overwrite behavior via --buffer_size
 #SBATCH -A kdesingh
 #SBATCH -p msigpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=24
 #SBATCH --mem=64gb
 #SBATCH -t 24:00:00
 #SBATCH --job-name=ip_train
@@ -64,34 +75,39 @@ LIVE_SPACING_ROT=${LIVE_SPACING_ROT:-3.0}
 
 RECORD=${RECORD:-1}
 FINE_TUNE=${FINE_TUNE:-0}
-COMPILE_MODELS=${COMPILE_MODELS:-0}
+COMPILE_MODELS=${COMPILE_MODELS:-1}
 USE_WANDB=${USE_WANDB:-1}
-AUTO_RESUME=${AUTO_RESUME:-0}
+AUTO_RESUME=${AUTO_RESUME:-1}
 RESUME_CKPT=${RESUME_CKPT:-}
 WANDB_ID=${WANDB_ID:-}
 WANDB_RESUME=${WANDB_RESUME:-allow}
-
 EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
 NUM_ITERS_OVERRIDE=${NUM_ITERS_OVERRIDE:-}
+TRAIN_NUM_WORKERS=${TRAIN_NUM_WORKERS:-16}
+TRAIN_PERSISTENT_WORKERS=${TRAIN_PERSISTENT_WORKERS:-1}
+TRAIN_PREFETCH_FACTOR=${TRAIN_PREFETCH_FACTOR:-4}
+TRAIN_VAL_CHECK_INTERVAL=${TRAIN_VAL_CHECK_INTERVAL:-50000}
+TRAIN_LOG_EVERY_N_STEPS=${TRAIN_LOG_EVERY_N_STEPS:-500}
+TRAIN_DEVICES=${TRAIN_DEVICES:-1}
+TRAIN_STRATEGY=${TRAIN_STRATEGY:-auto}
 
-# Pseudo-data bootstrap settings.
-BOOTSTRAP_IF_EMPTY=${BOOTSTRAP_IF_EMPTY:-1}
-BOOTSTRAP_FILL_BUFFER=${BOOTSTRAP_FILL_BUFFER:-1}
+# Ring/generation settings.
 TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
-# Default bootstrap budget is bounded. With --fill_buffer enabled (default),
-# generation stops once the ring is filled.
-TRAIN_NUM_TASKS=${TRAIN_NUM_TASKS:-$TRAIN_BUFFER_SIZE}
+MIN_BOOTSTRAP_TASKS=${MIN_BOOTSTRAP_TASKS:-512}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
 PCD_DTYPE=${PCD_DTYPE:-float16}
 
-# Optional per-job refresh before training.
-REFRESH_BEFORE_TRAIN=${REFRESH_BEFORE_TRAIN:-0}
-REFRESH_NUM_TASKS=${REFRESH_NUM_TASKS:-0}
-REFRESH_SEED=${REFRESH_SEED:-223344}
+# Parallel shard workers (continuous producer).
+ENABLE_PARALLEL_GENERATORS=${ENABLE_PARALLEL_GENERATORS:-1}
+GEN_NUM_SHARDS=${GEN_NUM_SHARDS:-4}
+GEN_CHUNK_TASKS=${GEN_CHUNK_TASKS:-256}
+GEN_TASK_START_BASE=${GEN_TASK_START_BASE:-1000000}
+GEN_TASK_START_STRIDE=${GEN_TASK_START_STRIDE:-100000000}
+GEN_SEED_STRIDE=${GEN_SEED_STRIDE:-1000003}
 
-# Validation-set bootstrap settings.
+# Validation set settings (fixed split for reproducibility).
 VAL_BUILD_IF_MISSING=${VAL_BUILD_IF_MISSING:-1}
 VAL_FORCE_REBUILD=${VAL_FORCE_REBUILD:-0}
 VAL_NUM_TASKS=${VAL_NUM_TASKS:-100}
@@ -116,18 +132,6 @@ map_workspace_to_host() {
   fi
 }
 
-# Resolve ShapeNet path robustly to avoid folder-name mismatches.
-if [ -z "$SHAPENET_PATH" ]; then
-  if [ -d "$DATA_DIR/shapenet" ]; then
-    SHAPENET_PATH="/workspace/data/shapenet"
-  elif [ -d "$DATA_DIR/ShapeNetCore.v2" ]; then
-    SHAPENET_PATH="/workspace/data/ShapeNetCore.v2"
-  else
-    # Keep a sane fallback for error messaging below.
-    SHAPENET_PATH="/workspace/data/shapenet"
-  fi
-fi
-
 count_task_files() {
   local d="$1"
   if [ ! -d "$d" ]; then
@@ -136,6 +140,17 @@ count_task_files() {
   fi
   find "$d" -maxdepth 1 -type f -name 'task_*.pt' | wc -l | tr -d ' '
 }
+
+# Resolve ShapeNet path robustly.
+if [ -z "$SHAPENET_PATH" ]; then
+  if [ -d "$DATA_DIR/shapenet" ]; then
+    SHAPENET_PATH="/workspace/data/shapenet"
+  elif [ -d "$DATA_DIR/ShapeNetCore.v2" ]; then
+    SHAPENET_PATH="/workspace/data/ShapeNetCore.v2"
+  else
+    SHAPENET_PATH="/workspace/data/shapenet"
+  fi
+fi
 
 HOST_SHAPENET="$(map_workspace_to_host "$SHAPENET_PATH")"
 HOST_TRAIN_DIR="$(map_workspace_to_host "$TRAIN_DATA_DIR")"
@@ -161,24 +176,20 @@ fi
 mkdir -p "$DATA_DIR/logs"
 mkdir -p "$(dirname "$HOST_MESH_PATH")" "$(dirname "$HOST_INDEX_PATH")" "$HOST_TRAIN_DIR" "$HOST_VAL_DIR" "$HOST_SAVE_ROOT"
 
-start=$(date +%s)
+start_ts=$(date +%s)
 echo "Starting unified pipeline on $(hostname)"
 echo "run_name=$RUN_NAME format=$DATA_FORMAT batch_size=$BATCH_SIZE"
 echo "shapenet_path=$SHAPENET_PATH (host: $HOST_SHAPENET)"
-echo "auto_resume=$AUTO_RESUME"
+echo "auto_resume=$AUTO_RESUME use_wandb=$USE_WANDB"
+echo "compile_models=$COMPILE_MODELS devices=$TRAIN_DEVICES strategy=$TRAIN_STRATEGY"
+echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interval=$TRAIN_VAL_CHECK_INTERVAL"
+echo "ring_buffer_size=$TRAIN_BUFFER_SIZE min_bootstrap_tasks=$MIN_BOOTSTRAP_TASKS"
+echo "parallel_generators=$ENABLE_PARALLEL_GENERATORS num_shards=$GEN_NUM_SHARDS chunk_tasks=$GEN_CHUNK_TASKS"
 if [ -n "$NUM_ITERS_OVERRIDE" ]; then
   echo "num_iters_override=$NUM_ITERS_OVERRIDE"
 fi
 if [ -n "$RESUME_CKPT" ]; then
   echo "resume_ckpt=$RESUME_CKPT"
-fi
-echo "use_wandb=$USE_WANDB"
-echo "train_buffer_size=$TRAIN_BUFFER_SIZE train_num_tasks=$TRAIN_NUM_TASKS fill_buffer=$BOOTSTRAP_FILL_BUFFER"
-
-BOOTSTRAP_NUM_TASKS="$TRAIN_NUM_TASKS"
-if [ "$BOOTSTRAP_FILL_BUFFER" = "1" ] && [ "$BOOTSTRAP_NUM_TASKS" -lt "$TRAIN_BUFFER_SIZE" ]; then
-  echo "Adjusting TRAIN_NUM_TASKS to TRAIN_BUFFER_SIZE for fill_buffer bootstrap."
-  BOOTSTRAP_NUM_TASKS="$TRAIN_BUFFER_SIZE"
 fi
 
 # Ensure gripper mesh exists.
@@ -212,67 +223,21 @@ python -m ip.scripts.generate_pseudo_demos \
   --gripper_mesh_path \"$MESH_PATH\""
 fi
 
-# Bootstrap train ring buffer if empty, or top-up if partially filled.
+# Minimal bootstrap only: enough to avoid empty train dataset.
 TRAIN_COUNT="$(count_task_files "$HOST_TRAIN_DIR")"
-BOOT_MODE=""
-if [ "$BOOTSTRAP_IF_EMPTY" = "1" ]; then
-  if [ "$TRAIN_COUNT" -eq 0 ]; then
-    BOOT_MODE="empty"
-  elif [ "$BOOTSTRAP_FILL_BUFFER" = "1" ] && [ "$TRAIN_COUNT" -lt "$TRAIN_BUFFER_SIZE" ]; then
-    BOOT_MODE="topup"
-  fi
-fi
-if [ -n "$BOOT_MODE" ]; then
-  EXTRA_BOOT_FLAGS=""
-  APPEND_BOOT_FLAG=""
-  BOOT_TASK_START=0
-  BOOT_NUM_TASKS_RUN="$BOOTSTRAP_NUM_TASKS"
-  if [ "$BOOT_MODE" = "empty" ]; then
-    echo "Training buffer empty, bootstrapping..."
-  else
-    BOOT_TASK_START="$TRAIN_COUNT"
-    BOOT_NUM_TASKS_RUN=$((TRAIN_BUFFER_SIZE - TRAIN_COUNT))
-    if [ "$BOOT_NUM_TASKS_RUN" -lt 1 ]; then
-      BOOT_NUM_TASKS_RUN=1
-    fi
-    echo "Training buffer partially filled ($TRAIN_COUNT/$TRAIN_BUFFER_SIZE), topping up $BOOT_NUM_TASKS_RUN tasks..."
-    APPEND_BOOT_FLAG="--append"
-  fi
-  if [ "$BOOTSTRAP_FILL_BUFFER" = "1" ]; then
-    EXTRA_BOOT_FLAGS="$EXTRA_BOOT_FLAGS --fill_buffer"
-  fi
+if [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_TASKS" ]; then
+  MISSING_TASKS=$((MIN_BOOTSTRAP_TASKS - TRAIN_COUNT))
+  echo "Bootstrapping train ring: current=$TRAIN_COUNT target=$MIN_BOOTSTRAP_TASKS missing=$MISSING_TASKS"
   "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
 python -m ip.scripts.generate_pseudo_demos \
   --shapenet_path \"$SHAPENET_PATH\" \
   --shapenet_index_path \"$INDEX_PATH\" \
   --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $BOOT_NUM_TASKS_RUN \
-  --task_start $BOOT_TASK_START \
-  --seed $TRAIN_GEN_SEED \
-  --storage_format trajectory \
-  --pcd_storage_dtype $PCD_DTYPE \
-  --buffer_size $TRAIN_BUFFER_SIZE \
-  --num_shards 1 \
-  --shard_id 0 \
-  --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
-  --gripper_mesh_path \"$MESH_PATH\" \
-  $APPEND_BOOT_FLAG \
-  $EXTRA_BOOT_FLAGS"
-fi
-
-# Optional pre-train refresh pass.
-if [ "$REFRESH_BEFORE_TRAIN" = "1" ] && [ "$REFRESH_NUM_TASKS" -gt 0 ]; then
-  echo "Refreshing training ring buffer before training..."
-  "$RUNNER" "set -euo pipefail
-export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
-python -m ip.scripts.generate_pseudo_demos \
-  --shapenet_path \"$SHAPENET_PATH\" \
-  --shapenet_index_path \"$INDEX_PATH\" \
-  --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $REFRESH_NUM_TASKS \
-  --seed $REFRESH_SEED \
+  --num_tasks $MISSING_TASKS \
+  --task_start $TRAIN_COUNT \
   --append \
+  --seed $TRAIN_GEN_SEED \
   --storage_format trajectory \
   --pcd_storage_dtype $PCD_DTYPE \
   --buffer_size $TRAIN_BUFFER_SIZE \
@@ -293,6 +258,77 @@ if [ "$TRAIN_COUNT" -eq 0 ]; then
   echo "ERROR: training ring buffer is empty at $HOST_TRAIN_DIR"
   exit 1
 fi
+
+ACTIVE_BUFFER_SIZE="$TRAIN_COUNT"
+GEN_WORKERS="$GEN_NUM_SHARDS"
+if [ "$GEN_WORKERS" -gt "$ACTIVE_BUFFER_SIZE" ]; then
+  GEN_WORKERS="$ACTIVE_BUFFER_SIZE"
+fi
+if [ "$GEN_WORKERS" -lt 1 ]; then
+  GEN_WORKERS=1
+fi
+echo "active_ring_size=$ACTIVE_BUFFER_SIZE gen_workers=$GEN_WORKERS"
+
+GEN_PIDS=()
+start_generators() {
+  if [ "$ENABLE_PARALLEL_GENERATORS" != "1" ]; then
+    echo "Parallel generators disabled."
+    return
+  fi
+  if [ "$GEN_WORKERS" -le 0 ]; then
+    echo "Parallel generators disabled because gen_workers=$GEN_WORKERS"
+    return
+  fi
+
+  echo "Starting $GEN_WORKERS sharded generator workers..."
+  local shard
+  for shard in $(seq 0 $((GEN_WORKERS - 1))); do
+    local shard_seed=$((TRAIN_GEN_SEED + shard * GEN_SEED_STRIDE))
+    local shard_task_start=$((GEN_TASK_START_BASE + shard * GEN_TASK_START_STRIDE))
+    local shard_log="$DATA_DIR/logs/ip_gen_${SLURM_JOB_ID:-manual}_shard${shard}.log"
+
+    "$RUNNER" "set -euo pipefail
+export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
+TASK_START=$shard_task_start
+while true; do
+  T0=\$(date +%s)
+  python -m ip.scripts.generate_pseudo_demos \
+    --shapenet_path \"$SHAPENET_PATH\" \
+    --shapenet_index_path \"$INDEX_PATH\" \
+    --save_dir \"$TRAIN_DATA_DIR\" \
+    --num_tasks $GEN_CHUNK_TASKS \
+    --task_start \$TASK_START \
+    --append \
+    --seed $shard_seed \
+    --storage_format trajectory \
+    --pcd_storage_dtype $PCD_DTYPE \
+    --buffer_size $ACTIVE_BUFFER_SIZE \
+    --num_shards $GEN_WORKERS \
+    --shard_id $shard \
+    --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
+    --gripper_mesh_path \"$MESH_PATH\"
+  TASK_START=\$((TASK_START + $GEN_CHUNK_TASKS))
+  T1=\$(date +%s)
+  echo \"[shard $shard] chunk=$GEN_CHUNK_TASKS dt=\$((T1 - T0))s next_task_start=\$TASK_START\"
+done" >"$shard_log" 2>&1 &
+
+    local gen_pid="$!"
+    GEN_PIDS+=("$gen_pid")
+    echo "  shard=$shard pid=$gen_pid log=$shard_log seed=$shard_seed start_task=$shard_task_start"
+  done
+}
+
+stop_generators() {
+  if [ "${#GEN_PIDS[@]}" -eq 0 ]; then
+    return
+  fi
+  echo "Stopping ${#GEN_PIDS[@]} generator workers..."
+  kill "${GEN_PIDS[@]}" 2>/dev/null || true
+  wait "${GEN_PIDS[@]}" 2>/dev/null || true
+}
+trap stop_generators EXIT INT TERM
+
+start_generators
 
 SUBSAMPLE_ARGS=""
 if [ "$SUBSAMPLE_LIVE" = "1" ]; then
@@ -319,11 +355,9 @@ if [ "$USE_WANDB" = "1" ]; then
   fi
 fi
 
+train_start_ts=$(date +%s)
 "$RUNNER" "set -euo pipefail
 mkdir -p \"$SAVE_ROOT\"
-if [ \"$USE_WANDB\" = \"1\" ]; then
-  export WANDB_MODE=\${WANDB_MODE:-online}
-fi
 python /workspace/instant_policy/ip/train.py \
   --run_name \"$RUN_NAME\" \
   --record $RECORD \
@@ -337,12 +371,21 @@ python /workspace/instant_policy/ip/train.py \
   --data_format \"$DATA_FORMAT\" \
   --batch_size $BATCH_SIZE \
   --num_points $NUM_POINTS \
+  --num_workers $TRAIN_NUM_WORKERS \
+  --persistent_workers $TRAIN_PERSISTENT_WORKERS \
+  --prefetch_factor $TRAIN_PREFETCH_FACTOR \
+  --val_check_interval $TRAIN_VAL_CHECK_INTERVAL \
+  --log_every_n_steps $TRAIN_LOG_EVERY_N_STEPS \
+  --devices $TRAIN_DEVICES \
+  --strategy \"$TRAIN_STRATEGY\" \
   --save_path \"$SAVE_ROOT\" \
   $RESUME_ARGS \
   $WANDB_ARGS \
   $ITER_OVERRIDE_ARGS \
   $SUBSAMPLE_ARGS \
   $EXTRA_TRAIN_ARGS"
+train_end_ts=$(date +%s)
+echo "Training wall time: $((train_end_ts - train_start_ts)) seconds"
 
-end=$(date +%s)
-echo "Finished unified pipeline in $((end - start)) seconds"
+end_ts=$(date +%s)
+echo "Finished unified pipeline in $((end_ts - start_ts)) seconds"

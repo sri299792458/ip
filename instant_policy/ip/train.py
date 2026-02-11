@@ -51,7 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_name', type=str, default='model.pt',
                         help='If fine-tuning, path to what is the name of the model.')
     parser.add_argument('--compile_models', type=int, default=0,
-                        help='If fine-tuning, whether to compile models. When not fine-tuning, it is defined in the config')
+                        help='Whether to torch.compile model modules [0, 1].')
     parser.add_argument('--data_path_train', type=str, default='./data/train',
                         help='Path to the training data.')
     parser.add_argument('--batch_size', type=int, default=16,
@@ -70,6 +70,20 @@ if __name__ == '__main__':
                         help='Rotation spacing (degrees) for subsample_live (trajectory format only).')
     parser.add_argument('--num_iters_override', type=int, default=None,
                         help='Optional override for total training steps (useful for throughput benchmarking).')
+    parser.add_argument('--num_workers', type=int, default=8,
+                        help='DataLoader worker count.')
+    parser.add_argument('--persistent_workers', type=int, default=1,
+                        help='Use persistent DataLoader workers when num_workers > 0 [0, 1].')
+    parser.add_argument('--prefetch_factor', type=int, default=4,
+                        help='DataLoader prefetch_factor when num_workers > 0.')
+    parser.add_argument('--val_check_interval', type=int, default=20000,
+                        help='Validation check interval in optimizer steps.')
+    parser.add_argument('--log_every_n_steps', type=int, default=500,
+                        help='Logging interval in optimizer steps.')
+    parser.add_argument('--devices', type=int, default=1,
+                        help='Number of GPUs/devices for Lightning trainer.')
+    parser.add_argument('--strategy', type=str, default='auto',
+                        help='Lightning strategy, e.g. auto or ddp.')
     parser.add_argument('--resume_ckpt_path', type=str, default=None,
                         help='Resume full trainer state from this checkpoint path.')
     parser.add_argument('--auto_resume', action='store_true',
@@ -97,6 +111,13 @@ if __name__ == '__main__':
     live_spacing_trans = args.live_spacing_trans
     live_spacing_rot = args.live_spacing_rot
     num_iters_override = args.num_iters_override
+    num_workers = int(args.num_workers)
+    persistent_workers = bool(args.persistent_workers)
+    prefetch_factor = int(args.prefetch_factor)
+    val_check_interval = int(args.val_check_interval)
+    log_every_n_steps = int(args.log_every_n_steps)
+    trainer_devices = int(args.devices)
+    trainer_strategy = args.strategy
     bs = args.batch_size
     ####################################################################################################################
     save_dir = f'{save_path}/{run_name}' if record else None
@@ -125,7 +146,7 @@ if __name__ == '__main__':
             cfg = pickle.load(open(f'{model_path}/config.pkl', 'rb'))
         else:
             cfg = dict(config)
-        cfg['compile_models'] = False
+        cfg['compile_models'] = compile_models
         cfg['batch_size'] = bs
         cfg['save_dir'] = save_dir
         cfg['record'] = record
@@ -133,7 +154,7 @@ if __name__ == '__main__':
     else:
         if fine_tune:
             cfg = pickle.load(open(f'{model_path}/config.pkl', 'rb'))
-            cfg['compile_models'] = False
+            cfg['compile_models'] = compile_models
             cfg['batch_size'] = bs
             cfg['save_dir'] = save_dir
             cfg['record'] = record
@@ -144,10 +165,9 @@ if __name__ == '__main__':
                 strict=True,
                 map_location=cfg['device'],
             ).to(cfg['device'])
-            if compile_models:
-                model.model.compile_models()
         else:
             cfg = dict(config)
+            cfg['compile_models'] = compile_models
             cfg['save_dir'] = save_dir
             cfg['record'] = record
             model = GraphDiffusion(cfg).to(cfg['device'])
@@ -157,6 +177,14 @@ if __name__ == '__main__':
             raise ValueError('--num_iters_override must be >= 1')
         cfg['num_iters'] = int(num_iters_override)
     ####################################################################################################################
+    loader_kwargs = {
+        'num_workers': num_workers,
+        'pin_memory': True,
+    }
+    if num_workers > 0:
+        loader_kwargs['persistent_workers'] = persistent_workers
+        loader_kwargs['prefetch_factor'] = prefetch_factor
+
     if data_format == 'trajectory':
         val_count = len(glob(os.path.join(data_path_val, 'task_*.pt')))
         train_count = len(glob(os.path.join(data_path_train, 'task_*.pt')))
@@ -185,8 +213,7 @@ if __name__ == '__main__':
             live_spacing_rot=live_spacing_rot,
         )
         dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
-        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True,
-                                num_workers=8, pin_memory=True)
+        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True, **loader_kwargs)
     else:
         val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
         train_count = len(glob(os.path.join(data_path_train, 'data_*.pt')))
@@ -194,8 +221,7 @@ if __name__ == '__main__':
         dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
 
         dset = RunningDataset(data_path_train, train_count, rand_g_prob=cfg['randomize_g_prob'])
-        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True,
-                                num_workers=8, pin_memory=True)
+        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True, **loader_kwargs)
     ####################################################################################################################
     logger = None
     if record:
@@ -217,15 +243,16 @@ if __name__ == '__main__':
     trainer = L.Trainer(
         enable_checkpointing=False,  # We save the models manually.
         accelerator=cfg['device'],
-        devices=1,
+        devices=trainer_devices,
+        strategy=trainer_strategy,
         max_steps=cfg['num_iters'],
         enable_progress_bar=True,
         precision='16-mixed',
-        val_check_interval=20000,  # TODO: might want to change that.
+        val_check_interval=val_check_interval,
         num_sanity_val_steps=2,
         check_val_every_n_epoch=None,
         logger=logger,
-        log_every_n_steps=500,  # TODO: might want to change that.
+        log_every_n_steps=log_every_n_steps,
         gradient_clip_val=1,
         gradient_clip_algorithm='norm',
         callbacks=[lr_monitor],

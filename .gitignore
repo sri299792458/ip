@@ -12,3 +12,7 @@ instant_policy/ip/deployment/debug_waypoints/
 instant_policy-main/
 instant_policy/docs/papers/instant_policy/
 rlbench_camera_lift_lid_vnc.json
+PyRep/
+PyRep
+RLBench_bimanual_ref/
+peract_bimanual_ref/

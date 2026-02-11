@@ -1925,3 +1925,59 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### Follow-up
 - The initial sweep measured mostly easy-positive attach recall.
 - We extended tuning to include hard-negative probes at targeted close events (local-frame offsets around the close pose) and added `hard_negative_false_rate` to ranking.
+
+## MSI Training Pipeline Rewrite (2026-02-11)
+
+### Decision
+- Replace full-ring bootstrap with minimal bootstrap + continuous sharded generation during training.
+- Keep one SLURM entrypoint script, but make generation truly parallel by running shard workers in background.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`:
+  - defaults: `USE_WANDB=1`, `AUTO_RESUME=1`,
+  - minimal bootstrap target: `MIN_BOOTSTRAP_TASKS=512`,
+  - continuous producer enabled by default:
+    - `ENABLE_PARALLEL_GENERATORS=1`
+    - `GEN_NUM_SHARDS=4`
+    - `GEN_CHUNK_TASKS=256`
+  - generators shard over active ring files visible to the current dataloader run (`ACTIVE_BUFFER_SIZE=train_count at train start`),
+  - per-shard logs emitted to `/scratch.global/$USER/ips/logs/ip_gen_<jobid>_shard*.log`,
+  - cleanup trap stops generator workers when the training job exits.
+
+### Why
+- First-principles producer/consumer balance: avoid waiting many hours for full upfront generation.
+- Keep training fed with fresh pseudo-demos while preserving fixed validation and checkpoint resume.
+
+### User-visible Effect
+- Startup latency is much lower than full prefill.
+- Data refresh runs during training by default.
+
+## Training Throughput Controls (2026-02-11)
+
+### Decision
+- Do not lock runtime behavior to paper defaults; expose throughput knobs for MSI tuning.
+
+### Changed
+- `ip/train.py`:
+  - made `--compile_models` effective for scratch/fine-tune/resume paths.
+  - added CLI controls:
+    - `--num_workers`
+    - `--persistent_workers`
+    - `--prefetch_factor`
+    - `--val_check_interval`
+    - `--log_every_n_steps`
+    - `--devices`
+    - `--strategy`
+- `apptainer/train_instant_policy.slurm`:
+  - defaults tuned for speed:
+    - `COMPILE_MODELS=1`
+    - `TRAIN_NUM_WORKERS=16`
+    - `TRAIN_PREFETCH_FACTOR=4`
+    - `TRAIN_VAL_CHECK_INTERVAL=50000`
+  - passes new throughput args into `ip/train.py`.
+
+### Why
+- Fastest training depends on hardware and pipeline saturation, not strict paper reproduction.
+
+### User-visible Effect
+- Throughput can be tuned from SLURM env vars without editing Python.

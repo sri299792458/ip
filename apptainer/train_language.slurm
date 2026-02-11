@@ -38,7 +38,14 @@ resolve_runner() {
 }
 
 RUNNER="$(resolve_runner || true)"
-DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
+DATA_DIR=${DATA_DIR:-}
+if [ -z "${DATA_DIR:-}" ]; then
+  if [ -d "/scratch.global/$USER/ip" ]; then
+    DATA_DIR="/scratch.global/$USER/ip"
+  else
+    DATA_DIR="/scratch.global/$USER/ips"
+  fi
+fi
 
 MAX_STEPS=${MAX_STEPS:-50000}
 BATCH_SIZE=${BATCH_SIZE:-16}
