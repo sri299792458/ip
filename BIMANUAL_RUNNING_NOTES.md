@@ -27,7 +27,7 @@ Restart bimanual implementation from first principles with a strict frame contra
 ### Implementation Stages
 1. **M0 (current)**: contracts + frame ops + invariance utilities.
 2. **M1 (current)**: bimanual graph representation with local per-arm subgraphs + cross-arm edges.
-3. **M2**: bimanual model heads and diffusion wrapper (relative targets only).
+3. **M2 (current)**: bimanual model heads and diffusion wrapper (relative targets only).
 4. **M3**: dataset adapter with strict assertions on frame semantics.
 5. **M4**: training entrypoint + smoke tests.
 
@@ -53,3 +53,19 @@ Restart bimanual implementation from first principles with a strict frame contra
 ### Why
 - This is the minimal graph substrate needed before adding transformer + diffusion heads.
 - Keeps representation fully local/relative and aligned with single-arm Instant Policy philosophy.
+
+## M2 Backbone Scaffold Implemented (2026-02-11)
+
+### Changed
+- Added `instant_policy/ip/bimanual/model.py`:
+  - `BimanualModelConfig`
+  - `BimanualBackbone`
+  - consumes `BimanualObservation`, builds graph via `BimanualGraphRep`, runs hetero transformer encoder, and predicts per-arm relative delta channels:
+    - translation (3)
+    - rotation (3)
+    - gripper (1)
+- Exported model classes from `instant_policy/ip/bimanual/__init__.py`.
+
+### Why
+- Provides a runnable pre-diffusion bimanual model layer on top of M1 graph construction.
+- Keeps outputs directly aligned with relative-action formulation needed for diffusion training later.

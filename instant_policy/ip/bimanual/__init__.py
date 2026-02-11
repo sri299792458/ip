@@ -20,6 +20,7 @@ from .frame_ops import (
     check_global_relabel_invariance,
 )
 from .graph_rep import BimanualGraphConfig, BimanualGraphRep
+from .model import BimanualBackbone, BimanualModelConfig
 
 __all__ = [
     "BimanualObservation",
@@ -33,4 +34,6 @@ __all__ = [
     "check_global_relabel_invariance",
     "BimanualGraphConfig",
     "BimanualGraphRep",
+    "BimanualBackbone",
+    "BimanualModelConfig",
 ]
