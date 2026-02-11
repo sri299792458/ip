@@ -29,8 +29,7 @@ DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
 # Paths inside container.
 TRAIN_DATA_DIR=${TRAIN_DATA_DIR:-/workspace/data/pseudo_ring/task_buffer}
 VAL_DATA_DIR=${VAL_DATA_DIR:-/workspace/data/pseudo_ring/val}
-SHAPENET_REL=${SHAPENET_REL:-ShapeNetCore.v2}
-SHAPENET_PATH=${SHAPENET_PATH:-/workspace/data/$SHAPENET_REL}
+SHAPENET_PATH=${SHAPENET_PATH:-}
 MESH_PATH=${MESH_PATH:-/workspace/data/assets/robotiq_2f85_collision_open.obj}
 INDEX_PATH=${INDEX_PATH:-/workspace/data/pseudo_ring/shapenet_index.json}
 
@@ -95,6 +94,18 @@ map_workspace_to_host() {
   fi
 }
 
+# Resolve ShapeNet path robustly to avoid folder-name mismatches.
+if [ -z "$SHAPENET_PATH" ]; then
+  if [ -d "$DATA_DIR/shapenet" ]; then
+    SHAPENET_PATH="/workspace/data/shapenet"
+  elif [ -d "$DATA_DIR/ShapeNetCore.v2" ]; then
+    SHAPENET_PATH="/workspace/data/ShapeNetCore.v2"
+  else
+    # Keep a sane fallback for error messaging below.
+    SHAPENET_PATH="/workspace/data/shapenet"
+  fi
+fi
+
 count_task_files() {
   local d="$1"
   if [ ! -d "$d" ]; then
@@ -114,6 +125,9 @@ HOST_SAVE_ROOT="$(map_workspace_to_host "$SAVE_ROOT")"
 
 if [ ! -d "$HOST_SHAPENET" ]; then
   echo "ERROR: ShapeNet path not found on host: $HOST_SHAPENET"
+  echo "       Tried SHAPENET_PATH=$SHAPENET_PATH"
+  echo "       Common choices under DATA_DIR ($DATA_DIR): shapenet or ShapeNetCore.v2"
+  echo "       Example: sbatch --export=ALL,SHAPENET_PATH=/workspace/data/shapenet train_instant_policy.slurm"
   exit 1
 fi
 
@@ -128,6 +142,7 @@ mkdir -p "$(dirname "$HOST_MESH_PATH")" "$(dirname "$HOST_INDEX_PATH")" "$HOST_T
 start=$(date +%s)
 echo "Starting unified pipeline on $(hostname)"
 echo "run_name=$RUN_NAME format=$DATA_FORMAT batch_size=$BATCH_SIZE"
+echo "shapenet_path=$SHAPENET_PATH (host: $HOST_SHAPENET)"
 echo "auto_resume=$AUTO_RESUME"
 if [ -n "$NUM_ITERS_OVERRIDE" ]; then
   echo "num_iters_override=$NUM_ITERS_OVERRIDE"
