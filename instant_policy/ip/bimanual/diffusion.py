@@ -51,8 +51,8 @@ class BimanualGraphDiffusion(L.LightningModule):
         super().__init__()
         self.model = backbone
         self.cfg = cfg
-        self.device_t = backbone.device
         self.loss_fn = torch.nn.L1Loss()
+        normalizer_device = str(backbone.device)
 
         self.noise_scheduler = DDIMScheduler(
             num_train_timesteps=cfg.num_diffusion_iters_train,
@@ -63,24 +63,25 @@ class BimanualGraphDiffusion(L.LightningModule):
 
         self.normalizer_left = Normalizer(
             pred_horizon=cfg.pred_horizon,
-            min_action=cfg.min_actions.to(self.device_t),
-            max_action=cfg.max_actions.to(self.device_t),
-            device=str(self.device_t),
+            min_action=cfg.min_actions.to(backbone.device),
+            max_action=cfg.max_actions.to(backbone.device),
+            device=normalizer_device,
         )
         self.normalizer_right = Normalizer(
             pred_horizon=cfg.pred_horizon,
-            min_action=cfg.min_actions.to(self.device_t),
-            max_action=cfg.max_actions.to(self.device_t),
-            device=str(self.device_t),
+            min_action=cfg.min_actions.to(backbone.device),
+            max_action=cfg.max_actions.to(backbone.device),
+            device=normalizer_device,
         )
 
-    @staticmethod
-    def _ensure_world_batch(batch: Any) -> BimanualWorldBatch:
+    def _ensure_world_batch(self, batch: Any) -> BimanualWorldBatch:
         if isinstance(batch, BimanualWorldBatch):
-            return batch
-        if isinstance(batch, dict):
-            return BimanualWorldBatch(**batch)
-        raise TypeError(f"Unsupported batch type: {type(batch)}")
+            wb = batch
+        elif isinstance(batch, dict):
+            wb = BimanualWorldBatch(**batch)
+        else:
+            raise TypeError(f"Unsupported batch type: {type(batch)}")
+        return wb.to(self.device)
 
     def add_noise(
         self,
@@ -245,19 +246,20 @@ class BimanualGraphDiffusion(L.LightningModule):
         del batch_idx, vis
         bsz = obs.points_left.shape[0]
         p = self.cfg.pred_horizon
+        local_device = obs.points_left.device
 
-        noisy_left = torch.randn((bsz, p, 6), device=self.device_t)
+        noisy_left = torch.randn((bsz, p, 6), device=local_device)
         noisy_left = torch.clamp(noisy_left, -1, 1)
         noisy_left = self.normalizer_left.denormalize_actions(noisy_left)
         noisy_left = actions_to_transforms(noisy_left.view(-1, 6)).view(bsz, p, 4, 4)
 
-        noisy_right = torch.randn((bsz, p, 6), device=self.device_t)
+        noisy_right = torch.randn((bsz, p, 6), device=local_device)
         noisy_right = torch.clamp(noisy_right, -1, 1)
         noisy_right = self.normalizer_right.denormalize_actions(noisy_right)
         noisy_right = actions_to_transforms(noisy_right.view(-1, 6)).view(bsz, p, 4, 4)
 
-        noisy_grips_left = torch.randn((bsz, p, 1), device=self.device_t)
-        noisy_grips_right = torch.randn((bsz, p, 1), device=self.device_t)
+        noisy_grips_left = torch.randn((bsz, p, 1), device=local_device)
+        noisy_grips_right = torch.randn((bsz, p, 1), device=local_device)
         noisy_grips_left = torch.clamp(noisy_grips_left, -1, 1)
         noisy_grips_right = torch.clamp(noisy_grips_right, -1, 1)
 
@@ -266,7 +268,7 @@ class BimanualGraphDiffusion(L.LightningModule):
             dt = torch.tensor(
                 [[k if k != self.cfg.num_diffusion_iters_test - 1 else self.cfg.num_diffusion_iters_train]]
                 * bsz,
-                device=self.device_t,
+                device=local_device,
             )
 
             preds = self.model(obs, diff_time=dt)

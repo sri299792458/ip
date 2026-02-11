@@ -128,3 +128,19 @@ Restart bimanual implementation from first principles with a strict frame contra
 
 ### Why
 - Aligns bimanual training/inference mechanics with the proven single-arm Instant Policy DDIM path while preserving the local/relative bimanual data contract.
+
+## GPU Training Entry Point (2026-02-11)
+
+### Changed
+- Added `instant_policy/ip/configs/bimanual_config.py` with default bimanual training config (GPU-first).
+- Added `instant_policy/ip/train_bimanual.py`:
+  - dataset loading from `ip/bimanual/dataset.py`,
+  - bimanual graph/backbone/diffusion construction,
+  - Lightning trainer wiring (checkpointing, optional wandb, resume/auto-resume).
+- Updated `instant_policy/ip/bimanual/data_adapter.py` with `BimanualWorldBatch.to(device)`.
+- Updated `instant_policy/ip/bimanual/diffusion.py` so incoming dataloader batches are moved to model device before world->relative conversion.
+- Updated `instant_policy/ip/bimanual/README.md` with training command and required sample keys.
+
+### Why
+- Makes bimanual branch runnable end-to-end for real training jobs without manual notebook glue.
+- Removes CPU/GPU mismatch risk from dataloader-fed batches.

@@ -25,6 +25,20 @@ class BimanualWorldBatch:
     grip_left_future: torch.Tensor
     grip_right_future: torch.Tensor
 
+    def to(self, device: torch.device | str) -> "BimanualWorldBatch":
+        """Move all tensors to a device."""
+        return BimanualWorldBatch(
+            points_world=self.points_world.to(device),
+            T_w_left_current=self.T_w_left_current.to(device),
+            T_w_right_current=self.T_w_right_current.to(device),
+            T_w_left_future=self.T_w_left_future.to(device),
+            T_w_right_future=self.T_w_right_future.to(device),
+            grip_left_current=self.grip_left_current.to(device),
+            grip_right_current=self.grip_right_current.to(device),
+            grip_left_future=self.grip_left_future.to(device),
+            grip_right_future=self.grip_right_future.to(device),
+        )
+
     def validate(self) -> None:
         if self.points_world.ndim != 3 or self.points_world.shape[-1] != 3:
             raise ValueError(
@@ -101,4 +115,3 @@ def relabel_world(batch: BimanualWorldBatch, T_new_w_old: torch.Tensor) -> Biman
         grip_left_future=batch.grip_left_future,
         grip_right_future=batch.grip_right_future,
     )
-

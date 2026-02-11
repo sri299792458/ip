@@ -25,6 +25,13 @@ No broad raw world-frame pose channels should be exposed as model shortcuts.
   - SE(3) compose/invert/relative utilities
   - world->local point conversion
   - global-relabel invariance check helper
+- `dataset.py`
+  - file-based dataset loader for bimanual world-batch `.pt` samples
+  - strict required keys + collate helper
+- `diffusion.py`
+  - dual-arm DDIM training/inference module
+- `train_bimanual.py`
+  - GPU-first Lightning training entrypoint
 
 ## Staged Build Plan
 
@@ -32,10 +39,32 @@ No broad raw world-frame pose channels should be exposed as model shortcuts.
 2. M1: bimanual graph representation with per-arm local subgraphs + cross-arm edges (done: `graph_rep.py`)
 3. M2: bimanual model and diffusion wrapper with relative labels only (backbone done: `model.py`)
 4. M3: dataset adapter that emits contract-compliant batches (world->relative adapter done: `data_adapter.py`)
-5. M4: train/eval entrypoints and smoke tests (DDIM bimanual module done: `diffusion.py`)
+5. M4: train/eval entrypoints and smoke tests (done)
 
 ## Smoke Command
 
 ```bash
 python -m ip.scripts.smoke_bimanual --device cpu
 ```
+
+## Training Command
+
+```bash
+python -m ip.train_bimanual \
+  --data_path_train /path/to/bimanual/train \
+  --data_path_val /path/to/bimanual/val \
+  --run_name bimanual_v1 \
+  --record 1 \
+  --use_wandb 0
+```
+
+Each `.pt` sample must contain these keys (or an object exposing them as attributes):
+- `points_world` `[N, 3]`
+- `T_w_left_current` `[4, 4]`
+- `T_w_right_current` `[4, 4]`
+- `T_w_left_future` `[P, 4, 4]`
+- `T_w_right_future` `[P, 4, 4]`
+- `grip_left_current` `[]` or `[1]`
+- `grip_right_current` `[]` or `[1]`
+- `grip_left_future` `[P]`
+- `grip_right_future` `[P]`
