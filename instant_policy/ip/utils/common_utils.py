@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 import inspect
-import open3d as o3d
 from torch import nn
 from scipy.spatial.transform import Rotation as Rot
 import math
@@ -130,6 +129,7 @@ class PositionalEncoder(nn.Module):
 
 
 def downsample_pcd(pcd_np, voxel_size=0.01):
+    import open3d as o3d
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pcd_np)
     pcd_new = pcd.voxel_down_sample(voxel_size)

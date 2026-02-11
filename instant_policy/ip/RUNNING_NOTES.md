@@ -2032,6 +2032,31 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### User-visible Effect
 - Every run now produces a machine-readable telemetry CSV usable for shard/throughput decisions.
 
+## DataLoader Segfault Stabilization (2026-02-11)
+
+### Decision
+- Remove `open3d` from DataLoader worker import path and use a pure NumPy point-cloud subsampling path.
+
+### Changed
+- `ip/utils/common_utils.py`
+  - removed top-level `open3d` import.
+  - moved `open3d` import inside `downsample_pcd` only.
+- `ip/utils/data_proc.py`
+  - removed top-level `open3d` import.
+  - `subsample_pcd` now does: finite-point filtering + random sampling (with replacement when needed).
+  - `remove_statistical_outliers` now returns finite-point filtering (no Open3D call).
+- `ip/train.py`
+  - sets `torch.set_float32_matmul_precision('high')` at startup for Tensor Core throughput and to remove Lightning warning.
+
+### Why
+- Training DataLoader workers (`TrajectoryDataset`) import `data_proc/common_utils`.
+- Top-level Open3D import in forked workers is a common source of worker segfault instability.
+- Pseudo-demo point clouds are already synthetic/clean; expensive Open3D outlier removal in training hot path is unnecessary.
+
+### User-visible Effect
+- Eliminates Open3D-related worker segfault risk in training dataloaders.
+- Lower per-sample CPU overhead during training.
+
 ## Resume/Env Robustness Fixes (2026-02-11)
 
 ### Decision

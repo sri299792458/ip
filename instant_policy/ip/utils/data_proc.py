@@ -2,7 +2,6 @@ import os
 import tempfile
 
 import numpy as np
-import open3d as o3d
 from scipy.spatial.transform import Rotation as Rot
 from ip.utils.common_utils import transform_pcd
 import torch
@@ -323,20 +322,24 @@ def pose_error(T1, T2, rot_scale=0.01):
 
 
 def subsample_pcd(sample, num_points=2048):
-    sample_filtered, _ = remove_statistical_outliers(sample, nb_neighbors=20, std_ratio=2.0)
-    rand_idx = np.random.choice(len(sample_filtered), num_points, replace=True if len(sample_filtered) < num_points else False)
-    return sample_filtered[rand_idx]
+    points = np.asarray(sample, dtype=np.float32)
+    if points.ndim != 2 or points.shape[1] != 3:
+        points = points.reshape(-1, 3)
+
+    valid_mask = np.isfinite(points).all(axis=1)
+    points = points[valid_mask]
+    if len(points) == 0:
+        return np.zeros((num_points, 3), dtype=np.float32)
+
+    replace = len(points) < num_points
+    rand_idx = np.random.choice(len(points), num_points, replace=replace)
+    return points[rand_idx]
 
 
 def remove_statistical_outliers(point_cloud, nb_neighbors=20, std_ratio=2.0):
-    # Create a PointCloud object from the NumPy array
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(point_cloud)
-
-    # Perform statistical outlier removal
-    [filtered_pcd, inlier_indices] = pcd.remove_statistical_outlier(nb_neighbors, std_ratio)
-
-    # Convert the filtered PointCloud back to a NumPy array
-    filtered_point_cloud = np.asarray(filtered_pcd.points)
-
+    del nb_neighbors, std_ratio
+    points = np.asarray(point_cloud, dtype=np.float32).reshape(-1, 3)
+    valid_mask = np.isfinite(points).all(axis=1)
+    filtered_point_cloud = points[valid_mask]
+    inlier_indices = np.nonzero(valid_mask)[0].tolist()
     return filtered_point_cloud, inlier_indices

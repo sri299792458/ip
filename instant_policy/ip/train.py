@@ -2,6 +2,7 @@ from ip.models.diffusion import *
 from ip.configs.base_config import config
 import pickle
 import os
+import torch
 from ip.utils.running_dataset import RunningDataset
 from ip.utils.trajectory_dataset import TrajectoryDataset
 from torch_geometric.data import DataLoader
@@ -34,6 +35,8 @@ def _latest_resume_checkpoint(save_dir: str):
 
 
 if __name__ == '__main__':
+    # Prefer Tensor Core throughput on modern GPUs (A100, etc.).
+    torch.set_float32_matmul_precision('high')
     ####################################################################################################################
     # Args
     parser = argparse.ArgumentParser()
