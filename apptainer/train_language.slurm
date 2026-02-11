@@ -11,15 +11,8 @@
 
 set -euo pipefail
 
-if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
-  if [ -d "$SLURM_SUBMIT_DIR/apptainer" ]; then
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR/apptainer"
-  else
-    SCRIPT_DIR="$SLURM_SUBMIT_DIR"
-  fi
-else
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-fi
+# Resolve from script location (not submit cwd) so absolute sbatch paths are reliable.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 RUNNER=${RUNNER:-$SCRIPT_DIR/run_instant_policy.sh}
 DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
