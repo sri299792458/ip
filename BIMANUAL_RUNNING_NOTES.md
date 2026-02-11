@@ -144,3 +144,34 @@ Restart bimanual implementation from first principles with a strict frame contra
 ### Why
 - Makes bimanual branch runnable end-to-end for real training jobs without manual notebook glue.
 - Removes CPU/GPU mismatch risk from dataloader-fed batches.
+
+## Bimanual Pseudo-Data Scaffold (2026-02-11)
+
+### Decision
+- Pretraining for bimanual should follow the same single-arm Instant Policy philosophy:
+  - kinematic pseudo trajectories,
+  - compositional task primitives,
+  - broad synthetic pretrain then RLBench2 fine-tune.
+- Use RLBench2 bimanual task taxonomy (13 tasks, benchmark 23 variations) as the target task family.
+
+### Implemented
+- Added `instant_policy/ip/generation_bimanual/`:
+  - `config.py`: task list, benchmark variation counts, generation config.
+  - `primitives.py`: 7 primitive families mapped to 13 RLBench2 bimanual tasks.
+  - `generator.py`: emits `task_*.pt` files directly in `BimanualWorldBatch` format.
+  - `README.md`: commands and contract.
+- Added CLI:
+  - `instant_policy/ip/scripts/generate_bimanual_pseudo_demos.py`
+- Updated `instant_policy/ip/bimanual/dataset.py` collate path to support samples saved with explicit singleton batch dim `[1, ...]` (concatenate) and unbatched samples (stack).
+
+### Primitive Set (locked)
+1. `cooperative_lift`
+2. `dual_push_sync`
+3. `dual_push_transport`
+4. `container_open_place_remove`
+5. `handover`
+6. `two_endpoint_tension`
+7. `tool_plus_receptacle`
+
+### Why
+- This is the minimal reusable set that captures bimanual interaction structure without per-task ad-hoc code.

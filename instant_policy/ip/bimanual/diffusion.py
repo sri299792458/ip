@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from contextlib import nullcontext
 
 import lightning as L
 import torch
@@ -181,7 +182,13 @@ class BimanualGraphDiffusion(L.LightningModule):
         obs, targets = build_obs_targets(wb)
 
         device_type = "cuda" if targets.delta_T_left.device.type == "cuda" else "cpu"
-        with torch.autocast(dtype=torch.float32, device_type=device_type):  # SVD in rigid fit prefers float32
+        # Keep CUDA path explicit; CPU autocast with float32 triggers warnings.
+        cast_ctx = (
+            torch.autocast(dtype=torch.float32, device_type=device_type)
+            if device_type == "cuda"
+            else nullcontext()
+        )
+        with cast_ctx:  # SVD in rigid fit prefers float32
             actions_left, grips_left, actions_right, grips_right = self.test_step(obs, batch_idx, vis=vis)
 
         trans_left, rot_left = self.se3_loss(actions_left, targets.delta_T_left)

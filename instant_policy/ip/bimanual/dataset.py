@@ -74,7 +74,14 @@ def collate_bimanual_world_batch(batch: List[BimanualWorldBatch]) -> BimanualWor
         vals = [getattr(x, k) for x in batch]
         if vals[0].ndim == 0:
             vals = [v.unsqueeze(0) for v in vals]
-        stacked[k] = torch.stack(vals, dim=0)
+            stacked[k] = torch.stack(vals, dim=0)
+            continue
+
+        # Support samples saved with explicit singleton batch dim [1, ...].
+        if vals[0].shape[0] == 1 and all(v.shape[0] == 1 for v in vals):
+            stacked[k] = torch.cat(vals, dim=0)
+        else:
+            stacked[k] = torch.stack(vals, dim=0)
     wb = BimanualWorldBatch(**stacked)
     wb.validate()
     return wb

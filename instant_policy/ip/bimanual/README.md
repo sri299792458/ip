@@ -68,3 +68,25 @@ Each `.pt` sample must contain these keys (or an object exposing them as attribu
 - `grip_right_current` `[]` or `[1]`
 - `grip_left_future` `[P]`
 - `grip_right_future` `[P]`
+
+## Pseudo Pretrain Data
+
+Generate RLBench2-style bimanual pseudo samples (13 tasks) with:
+
+```bash
+python -m ip.scripts.generate_bimanual_pseudo_demos \
+  --save_dir /path/to/pseudo_bimanual/train \
+  --num_samples 100000 \
+  --pred_horizon 8 \
+  --num_points 2048
+```
+
+Then train with:
+
+```bash
+python -m ip.train_bimanual \
+  --data_path_train /path/to/pseudo_bimanual/train \
+  --data_path_val /path/to/pseudo_bimanual/val \
+  --run_name bimanual_pretrain_v1 \
+  --record 1
+```
