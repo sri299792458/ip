@@ -112,7 +112,6 @@ class GenerationConfig:
     object_yaw_noise_deg: float = 45.0
 
     attach_on_grasp: bool = True
-    attach_radius: float = 0.015
     attach_capture_min_points: int = 3
     gripper_mesh_path: Optional[str] = None  # Required by generator for paper-fidelity runs.
 

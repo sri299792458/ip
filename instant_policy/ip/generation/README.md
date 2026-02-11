@@ -38,7 +38,7 @@ These are the defaults we treat as paper-canonical for pseudo generation:
 - gripper-noise `10%` (`gripper_noise_prob=0.1`)
 - Robotiq 2F-85 mesh required (`--gripper_mesh_path`)
 - attach on open->closed and detach on closed->open
-- attach gate uses distance (`attach_radius=0.015 m`) plus jaw-capture check (`attach_capture_min_points=3`)
+- front-only jaw-capture attach (`attach_capture_min_points=3`), no full-mesh distance gate
 - gripper mesh frame canonicalization to policy-origin frame (`z=0.088 m` from URDF base/flange frame)
 - three depth cameras rendered via PyRender (RLBench-style rig offsets + intrinsics, 128x128)
 - debug video rendering uses a separate high-res visual renderer (`640x640`) and does not change training observations
@@ -81,7 +81,7 @@ Use `trajectory` for large-scale continuous generation.
 2. Sample pseudo-task waypoint specs (object-relative).
 3. Generate multiple demos per task by varying start pose and scene perturbation.
 4. Interpolate and resample trajectory at fixed spacing.
-5. Attach/detach object on gripper state transitions using distance/jaw-capture gating.
+5. Attach/detach object on gripper state transitions using front-only jaw-capture gating.
 6. Render object point clouds from depth cameras using clean gripper transitions (rigid attachment).
 7. Apply 10% gripper-state corruption to stored labels (not to attachment dynamics).
 8. Store in chosen format (`steps` or `trajectory`).
@@ -95,9 +95,8 @@ Use `trajectory` for large-scale continuous generation.
 - Loaded mesh is translated to the policy-origin frame so waypoint/contact sampling matches the same convention used by deployment/model inputs (`flange/base -> policy-origin = 0.088 m`).
 - Contact is event-based:
   - close transition attempts object-centric attach first (if waypoint targets an object),
-  - attach succeeds if either:
-    - object-to-gripper distance is within `attach_radius`, or
-    - enough object points lie in the gripper jaw-capture region (`attach_capture_min_points`, thin-object robustness),
+  - attach succeeds only if enough object points lie in the front jaw-capture region (`attach_capture_min_points`, thin-object robustness),
+  - backside points (behind policy-origin `z`) are excluded from attach eligibility,
   - for non-object-centric waypoints, best candidate object is selected from the same gating rule,
   - open transition detaches.
 - Gripper label noise (`gripper_noise_prob`) is applied after render/simulation, so grasped-object motion remains rigid during pseudo trajectory synthesis.
@@ -165,8 +164,7 @@ python -m ip.scripts.tune_attach_gates \
   --gripper_mesh_path /scratch/.../robotiq_2f85_collision_open.obj \
   --num_tasks 20 \
   --num_demos_per_task 2 \
-  --attach_radius_grid 0.015 0.020 0.025 0.030 \
-  --attach_capture_min_points_grid 1 3 5 \
+  --attach_capture_min_points_grid 2 3 4 5 \
   --hard_negative_offset_scale 0.35 \
   --hard_negative_offset_min_m 0.04 \
   --hard_negative_offset_max_m 0.12 \
@@ -228,7 +226,7 @@ If RGB renders look static, this can still be correct:
 - Headless render failure: set `PYOPENGL_PLATFORM=egl`.
 - Storage explosion: use `trajectory` mode + ring buffer.
 - Unexpected no-motion visuals: verify gripper state transitions and attachment behavior.
-- If the gripper appears to pass through objects frequently: verify mesh frame canonicalization and that `attach_radius` is not too large for your object scale prior.
+- If the gripper appears to pass through objects frequently: verify mesh frame canonicalization and front-only jaw-capture settings (`attach_capture_min_points`).
 
 ## Dependencies
 

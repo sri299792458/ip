@@ -1,6 +1,5 @@
 import argparse
 import csv
-import itertools
 import json
 from typing import Dict, List
 
@@ -115,7 +114,7 @@ def _summarize(totals: Dict[str, float]) -> Dict[str, float]:
     }
 
 
-def _build_config(args, skill: str, attach_radius: float, capture_min_points: int) -> GenerationConfig:
+def _build_config(args, skill: str, capture_min_points: int) -> GenerationConfig:
     return GenerationConfig(
         shapenet_path=args.shapenet_path,
         shapenet_index_path=args.shapenet_index_path,
@@ -133,7 +132,6 @@ def _build_config(args, skill: str, attach_radius: float, capture_min_points: in
         disturbance_prob=args.disturbance_prob,
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
-        attach_radius=float(attach_radius),
         attach_capture_min_points=int(capture_min_points),
         gripper_mesh_path=args.gripper_mesh_path,
         max_meshes=args.max_meshes,
@@ -144,7 +142,7 @@ def _build_config(args, skill: str, attach_radius: float, capture_min_points: in
     )
 
 
-def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List[str]):
+def _run_combo(args, capture_min_points: int, skills: List[str]):
     combo_totals = _new_totals()
     per_skill = {}
     hard_negative_local_offsets = None
@@ -163,7 +161,7 @@ def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List
         )
 
     for skill_idx, skill in enumerate(skills):
-        config = _build_config(args, skill, attach_radius, capture_min_points)
+        config = _build_config(args, skill, capture_min_points)
         generator = PseudoDemoGenerator(config, scene_encoder=None, build_renderer=False)
         skill_totals = _new_totals()
 
@@ -189,7 +187,6 @@ def _run_combo(args, attach_radius: float, capture_min_points: int, skills: List
 
     combo_metrics = _summarize(combo_totals)
     row = {
-        "attach_radius": float(attach_radius),
         "attach_capture_min_points": int(capture_min_points),
         "totals": combo_totals,
         "metrics": combo_metrics,
@@ -204,14 +201,14 @@ def _print_ranked(rows: List[dict], top_k: int) -> None:
 
     print("\nAttach tuning results (ranked):")
     print(
-        "rank  radius  cap_min  score    target_att  overall_att  target_miss  "
+        "rank  cap_min  score    target_att  overall_att  target_miss  "
         "hardneg_fa  wrongobj  hardneg_wrongobj  close_events"
     )
     for i, row in enumerate(top, start=1):
         m = row["metrics"]
         t = row["totals"]
         print(
-            f"{i:>4}  {row['attach_radius']:<6.3f}  {row['attach_capture_min_points']:<7d}  "
+            f"{i:>4}  {row['attach_capture_min_points']:<7d}  "
             f"{m['score']:<7.4f}  {m['target_attach_rate']:<10.4f}  {m['attach_rate']:<11.4f}  "
             f"{m['target_miss_rate']:<11.4f}  {m['hard_negative_false_rate']:<10.4f}  "
             f"{m['wrong_object_candidate_rate']:<8.4f}  {m['hard_negative_other_eligible_rate']:<16.4f}  "
@@ -221,7 +218,6 @@ def _print_ranked(rows: List[dict], top_k: int) -> None:
 
 def _write_csv(path: str, rows: List[dict]) -> None:
     fieldnames = [
-        "attach_radius",
         "attach_capture_min_points",
         "score",
         "target_attach_rate",
@@ -263,7 +259,6 @@ def _write_csv(path: str, rows: List[dict]) -> None:
             t = row["totals"]
             writer.writerow(
                 {
-                    "attach_radius": row["attach_radius"],
                     "attach_capture_min_points": row["attach_capture_min_points"],
                     "score": m["score"],
                     "target_attach_rate": m["target_attach_rate"],
@@ -302,7 +297,7 @@ def _write_csv(path: str, rows: List[dict]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tune pseudo-demo attach gating by sweeping attach radius and capture threshold."
+        description="Tune pseudo-demo attach gating by sweeping jaw-capture threshold."
     )
     parser.add_argument("--shapenet_path", type=str, required=True)
     parser.add_argument("--shapenet_index_path", type=str, default=None)
@@ -333,8 +328,7 @@ def main():
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
 
     parser.add_argument("--no_attach", action="store_true")
-    parser.add_argument("--attach_radius_grid", type=float, nargs="+", default=[0.015, 0.02, 0.025, 0.03])
-    parser.add_argument("--attach_capture_min_points_grid", type=int, nargs="+", default=[1, 3, 5])
+    parser.add_argument("--attach_capture_min_points_grid", type=int, nargs="+", default=[2, 3, 4, 5])
     parser.add_argument(
         "--hard_negative_offset_m",
         type=float,
@@ -369,15 +363,18 @@ def main():
 
     args = parser.parse_args()
 
-    combos = list(itertools.product(args.attach_radius_grid, args.attach_capture_min_points_grid))
+    combos = list(args.attach_capture_min_points_grid)
     results = []
 
     print("Running attach tuning sweep:")
-    print(f"  combos={len(combos)} skills={args.skills} num_tasks={args.num_tasks} demos_per_task={args.num_demos_per_task}")
+    print(
+        f"  combos={len(combos)} skills={args.skills} "
+        f"num_tasks={args.num_tasks} demos_per_task={args.num_demos_per_task}"
+    )
 
-    for radius, cap_min in combos:
-        print(f"\\n[combo] attach_radius={radius:.4f}, attach_capture_min_points={cap_min}")
-        row = _run_combo(args, float(radius), int(cap_min), args.skills)
+    for cap_min in combos:
+        print(f"\\n[combo] attach_capture_min_points={cap_min}")
+        row = _run_combo(args, int(cap_min), args.skills)
         m = row["metrics"]
         print(
             "  -> "

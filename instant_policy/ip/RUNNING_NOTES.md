@@ -1,6 +1,6 @@
 # Deployment Running Notes
 
-Last updated: 2026-02-10
+Last updated: 2026-02-11
 
 ## Log Discipline
 
@@ -10,6 +10,34 @@ Keep this file as the canonical deployment decision log.
 ### Rule
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
+
+## Front-Only Capture Attach (2026-02-11)
+
+### Decision
+Replace mixed distance/capture attachment with a single first-principles rule:
+front-only jaw-capture attach on close transition.
+
+### Changed
+- `ip/generation/pseudo_demo_generator.py`
+  - jaw-capture region now clamps `z_min` to `0.0` in gripper-local policy frame (no backside capture).
+  - `_should_attach` now ignores distance and attaches only when
+    `cap_count >= attach_capture_min_points`.
+- `ip/generation/config.py`
+  - removed `attach_radius` from generation config.
+- `ip/scripts/generate_pseudo_demos.py`
+  - removed `--attach_radius` and its config wiring.
+- `ip/scripts/tune_attach_gates.py`
+  - removed `attach_radius` sweep axis; tuner now sweeps capture threshold only.
+- `ip/generation/README.md`
+  - updated defaults/flow/commands to reflect capture-only front-side attach.
+
+### Why
+- Full-mesh distance gating allows non-physical backside attaches.
+- A single geometric capture rule is easier to reason about and aligns with the intended gripper behavior.
+
+### User-visible Effect
+- Pseudo grasps are now constrained to the front jaw region only.
+- CLI/config surface is cleaner: no radius parameter for grasp attachment.
 
 ## Attach Defaults Update (2026-02-10)
 

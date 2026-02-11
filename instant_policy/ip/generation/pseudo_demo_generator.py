@@ -204,7 +204,8 @@ class PseudoDemoGenerator:
             "x_max": float(x_half + xy_margin),
             "y_min": float(y_min - xy_margin),
             "y_max": float(y_max + xy_margin),
-            "z_min": float(tip_z - z_depth),
+            # Front-only capture: disallow backside grasping behind policy origin.
+            "z_min": float(max(0.0, tip_z - z_depth)),
             "z_max": float(tip_z + xy_margin),
         }
 
@@ -231,12 +232,10 @@ class PseudoDemoGenerator:
         cap_count = self._object_capture_count(scene, gripper_pose, obj_index)
         return dist, cap_count
 
-    def _should_attach(self, dist: Optional[float], cap_count: int) -> bool:
-        if dist is not None and dist <= self.config.attach_radius:
-            return True
-        if cap_count >= int(self.config.attach_capture_min_points):
-            return True
-        return False
+    def _should_attach(self, _dist: Optional[float], cap_count: int) -> bool:
+        # First-principles policy: attach only when object points are inside
+        # the front jaw-capture region at close transition.
+        return cap_count >= int(self.config.attach_capture_min_points)
 
     @staticmethod
     def _new_attach_stats() -> Dict[str, float]:

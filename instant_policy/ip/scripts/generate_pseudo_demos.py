@@ -28,7 +28,6 @@ def build_config(args):
         disturbance_prob=args.disturbance_prob,
         gripper_noise_prob=args.gripper_noise_prob,
         attach_on_grasp=not args.no_attach,
-        attach_radius=args.attach_radius,
         attach_capture_min_points=args.attach_capture_min_points,
         gripper_mesh_path=args.gripper_mesh_path,
         seed=args.seed,
@@ -93,7 +92,6 @@ def main():
     parser.add_argument("--disturbance_prob", type=float, default=0.3)
     parser.add_argument("--gripper_noise_prob", type=float, default=0.1)
     parser.add_argument("--no_attach", action="store_true")
-    parser.add_argument("--attach_radius", type=float, default=0.015)
     parser.add_argument(
         "--attach_capture_min_points",
         type=int,
