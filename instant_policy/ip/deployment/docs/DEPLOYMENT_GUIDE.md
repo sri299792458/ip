@@ -62,7 +62,7 @@ This installs:
 - PyTorch 2.2.0 with CUDA 11.8
 - PyTorch Geometric (pyg) + cluster/scatter
 - PyTorch Lightning
-- NumPy, SciPy, Open3D, and more
+- NumPy, SciPy, and more
 
 ### 2.2 Install PyG-lib (required for graph operations)
 ```bash

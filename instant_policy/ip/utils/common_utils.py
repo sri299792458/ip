@@ -129,11 +129,21 @@ class PositionalEncoder(nn.Module):
 
 
 def downsample_pcd(pcd_np, voxel_size=0.01):
-    import open3d as o3d
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pcd_np)
-    pcd_new = pcd.voxel_down_sample(voxel_size)
-    return np.asarray(pcd_new.points)
+    points = np.asarray(pcd_np, dtype=np.float32).reshape(-1, 3)
+    valid = np.isfinite(points).all(axis=1)
+    points = points[valid]
+    if len(points) == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    if voxel_size is None or voxel_size <= 0:
+        return points
+
+    mins = points.min(axis=0)
+    voxel_idx = np.floor((points - mins) / float(voxel_size)).astype(np.int64)
+    uniq, inv, counts = np.unique(voxel_idx, axis=0, return_inverse=True, return_counts=True)
+    sums = np.zeros((len(uniq), 3), dtype=np.float64)
+    np.add.at(sums, inv, points.astype(np.float64))
+    centroids = sums / counts[:, None]
+    return centroids.astype(np.float32)
 
 
 def printarr(*arrs, float_width=6):

@@ -2057,6 +2057,73 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 - Eliminates Open3D-related worker segfault risk in training dataloaders.
 - Lower per-sample CPU overhead during training.
 
+## Open3D Scope Narrowing (2026-02-11)
+
+### Decision
+- Keep Open3D-based filtering available for non-training paths, but never rely on it inside training DataLoader workers.
+
+### Changed
+- `ip/utils/trajectory_dataset.py`:
+  - added worker-local NumPy subsampling helper and switched training live-step sampling to it.
+- `ip/utils/data_proc.py`:
+  - restored Open3D statistical outlier removal path.
+  - kept robust fallback to finite-point filtering if Open3D is unavailable/fails.
+
+### Why
+- The segfault risk is specific to multiprocessing worker context.
+- Non-worker paths (deployment/debug/offline scripts) can still use Open3D behavior.
+
+### User-visible Effect
+- Training workers stay stable.
+- Existing Open3D filtering semantics remain available elsewhere.
+
+## Open3D Full Removal (2026-02-11)
+
+### Decision
+- Remove Open3D entirely from the codebase dependencies and replace remaining geometry utilities with NumPy/SciPy.
+
+### Changed
+- `ip/utils/common_utils.py`
+  - `downsample_pcd` is now NumPy voxel-grid centroid downsampling.
+- `ip/deployment/perception/realsense_perception.py`
+  - replaced Open3D voxel downsampling with NumPy voxel-grid centroid downsampling.
+- `ip/utils/data_proc.py`
+  - `remove_statistical_outliers` replaced with SciPy `cKDTree` KNN-distance statistical filter.
+- Dependency manifests:
+  - removed `open3d==0.18.0` from `instant_policy/environment.yml`.
+  - removed `open3d==0.18.0` from `apptainer/instant_policy.def`.
+- Docs:
+  - removed Open3D dependency mention from generation/deployment docs.
+
+### Why
+- Open3D in multiprocessing/worker-heavy paths can be unstable.
+- Current use-cases do not require Open3D-specific functionality.
+- NumPy/SciPy equivalents keep behavior simple and predictable.
+
+### User-visible Effect
+- No Open3D dependency required for training/deployment/generation paths.
+- Lower dependency friction and fewer environment-specific crashes.
+
+## Resume Checkpoint Key Alignment (2026-02-11)
+
+### Decision
+- Make `train.py` robust to Lightning checkpoint key-format mismatch between compiled and uncompiled modules (`._orig_mod.` wrappers).
+
+### Changed
+- `ip/train.py`:
+  - added checkpoint alignment helper that:
+    - compares current model state_dict keys vs checkpoint keys,
+    - normalizes both by stripping `._orig_mod.` segments,
+    - if normalized sets match, rewrites checkpoint `state_dict` to current model key format,
+    - saves a temporary aligned checkpoint and uses it for `trainer.fit(..., ckpt_path=...)`.
+
+### Why
+- `AUTO_RESUME` can pick `best.pt`/`last.pt` saved in a repaired (uncompiled) key format.
+- When current run uses compiled modules, strict restore can fail with massive missing/unexpected key lists.
+
+### User-visible Effect
+- Resume works across compile/uncompile key format differences without manual checkpoint surgery.
+
 ## Resume/Env Robustness Fixes (2026-02-11)
 
 ### Decision

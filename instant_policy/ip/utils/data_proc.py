@@ -3,6 +3,7 @@ import tempfile
 
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
+from scipy.spatial import cKDTree
 from ip.utils.common_utils import transform_pcd
 import torch
 from torch_geometric.data import Data
@@ -322,24 +323,35 @@ def pose_error(T1, T2, rot_scale=0.01):
 
 
 def subsample_pcd(sample, num_points=2048):
-    points = np.asarray(sample, dtype=np.float32)
-    if points.ndim != 2 or points.shape[1] != 3:
-        points = points.reshape(-1, 3)
-
-    valid_mask = np.isfinite(points).all(axis=1)
-    points = points[valid_mask]
-    if len(points) == 0:
+    sample_filtered, _ = remove_statistical_outliers(sample, nb_neighbors=20, std_ratio=2.0)
+    if len(sample_filtered) == 0:
         return np.zeros((num_points, 3), dtype=np.float32)
-
-    replace = len(points) < num_points
-    rand_idx = np.random.choice(len(points), num_points, replace=replace)
-    return points[rand_idx]
+    rand_idx = np.random.choice(len(sample_filtered), num_points,
+                                replace=True if len(sample_filtered) < num_points else False)
+    return sample_filtered[rand_idx]
 
 
 def remove_statistical_outliers(point_cloud, nb_neighbors=20, std_ratio=2.0):
-    del nb_neighbors, std_ratio
     points = np.asarray(point_cloud, dtype=np.float32).reshape(-1, 3)
     valid_mask = np.isfinite(points).all(axis=1)
-    filtered_point_cloud = points[valid_mask]
-    inlier_indices = np.nonzero(valid_mask)[0].tolist()
+    points = points[valid_mask]
+    if len(points) == 0:
+        return points, []
+    if len(points) <= 2:
+        return points, np.arange(len(points)).tolist()
+
+    k = int(max(2, min(nb_neighbors + 1, len(points))))
+    tree = cKDTree(points)
+    dists, _ = tree.query(points, k=k)
+    mean_neighbor_dist = dists[:, 1:].mean(axis=1)
+
+    mu = float(np.mean(mean_neighbor_dist))
+    sigma = float(np.std(mean_neighbor_dist))
+    thr = mu + float(std_ratio) * sigma
+    inlier_mask = mean_neighbor_dist <= thr
+    if not np.any(inlier_mask):
+        inlier_mask[np.argmin(mean_neighbor_dist)] = True
+
+    filtered_point_cloud = points[inlier_mask]
+    inlier_indices = np.nonzero(inlier_mask)[0].tolist()
     return filtered_point_cloud, inlier_indices

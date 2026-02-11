@@ -210,7 +210,7 @@ If RGB renders look static, this can still be correct:
 ## Dependencies
 
 Required:
-- `numpy`, `scipy`, `trimesh`, `pyrender`, `open3d`, `torch`
+- `numpy`, `scipy`, `trimesh`, `pyrender`, `torch`
 
 Optional:
 - `imageio`, `imageio-ffmpeg` (video export)

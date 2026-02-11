@@ -7,13 +7,28 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
 from ip.utils.common_utils import transform_pcd
-from ip.utils.data_proc import subsample_pcd, subsample_traj
+from ip.utils.data_proc import subsample_traj
 
 
 def _task_index(path):
     name = os.path.basename(path)
     if not name.startswith("task_") or not name.endswith(".pt"):
         return None
+
+
+def _subsample_pcd_worker_safe(sample, num_points, rng):
+    points = np.asarray(sample, dtype=np.float32)
+    if points.ndim != 2 or points.shape[1] != 3:
+        points = points.reshape(-1, 3)
+
+    valid = np.isfinite(points).all(axis=1)
+    points = points[valid]
+    if len(points) == 0:
+        return np.zeros((num_points, 3), dtype=np.float32)
+
+    replace = len(points) < num_points
+    idx = rng.choice(len(points), size=num_points, replace=replace)
+    return points[idx]
     stem = name.split("_", 1)[1].split(".", 1)[0]
     try:
         return int(stem)
@@ -158,7 +173,7 @@ class TrajectoryDataset(Dataset):
         T_w_e = np.asarray(traj[t], dtype=np.float32)
         inv_T = np.linalg.inv(T_w_e)
 
-        pcd = subsample_pcd(pcds[t], self.num_points)
+        pcd = _subsample_pcd_worker_safe(pcds[t], self.num_points, rng)
         pos_obs = transform_pcd(pcd, inv_T)
 
         actions = []

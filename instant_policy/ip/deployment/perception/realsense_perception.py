@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import numpy as np
-import open3d as o3d
 import pyrealsense2 as rs
 
 from ip.deployment.perception.sam_segmentation import SAMSegmenter
@@ -192,7 +191,7 @@ class RealSensePerception:
             raise RuntimeError("No valid point clouds captured from any configured camera.")
 
         pcd = np.concatenate(all_points, axis=0)
-        if self._voxel_size and o3d is not None:
+        if self._voxel_size:
             pcd = self._voxel_downsample(pcd, self._voxel_size)
         return pcd.astype(np.float32)
 
@@ -201,7 +200,17 @@ class RealSensePerception:
 
     @staticmethod
     def _voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
-        cloud = o3d.geometry.PointCloud()
-        cloud.points = o3d.utility.Vector3dVector(points)
-        down = cloud.voxel_down_sample(voxel_size)
-        return np.asarray(down.points)
+        pts = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+        valid = np.isfinite(pts).all(axis=1)
+        pts = pts[valid]
+        if len(pts) == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+        if voxel_size <= 0:
+            return pts
+
+        mins = pts.min(axis=0)
+        vox = np.floor((pts - mins) / float(voxel_size)).astype(np.int64)
+        uniq, inv, counts = np.unique(vox, axis=0, return_inverse=True, return_counts=True)
+        sums = np.zeros((len(uniq), 3), dtype=np.float64)
+        np.add.at(sums, inv, pts.astype(np.float64))
+        return (sums / counts[:, None]).astype(np.float32)

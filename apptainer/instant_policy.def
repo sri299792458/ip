@@ -87,7 +87,6 @@ From: nvidia/cuda:12.1.1-devel-ubuntu20.04
         numpy==1.26.4 \
         scipy==1.14.1 \
         scikit-learn==1.5.1 \
-        open3d==0.18.0 \
         trimesh==4.11.0 \
         pyrender==0.1.45 \
         pyopengl==3.1.0 \

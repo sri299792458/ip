@@ -3,6 +3,7 @@ from ip.configs.base_config import config
 import pickle
 import os
 import torch
+import tempfile
 from ip.utils.running_dataset import RunningDataset
 from ip.utils.trajectory_dataset import TrajectoryDataset
 from torch_geometric.data import DataLoader
@@ -32,6 +33,48 @@ def _latest_resume_checkpoint(save_dir: str):
     if os.path.isfile(best_ckpt):
         return best_ckpt
     return None
+
+
+def _norm_orig_mod_key(key: str) -> str:
+    return key.replace("._orig_mod.", ".")
+
+
+def _align_checkpoint_state_dict_for_model(ckpt_path: str, model: torch.nn.Module) -> str:
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    if "state_dict" not in ckpt or not isinstance(ckpt["state_dict"], dict):
+        return ckpt_path
+
+    src_sd = ckpt["state_dict"]
+    src_keys = list(src_sd.keys())
+    tgt_keys = list(model.state_dict().keys())
+    if set(src_keys) == set(tgt_keys):
+        return ckpt_path
+
+    src_norm = {_norm_orig_mod_key(k): k for k in src_keys}
+    tgt_norm = {_norm_orig_mod_key(k): k for k in tgt_keys}
+    if len(src_norm) != len(src_keys) or len(tgt_norm) != len(tgt_keys):
+        return ckpt_path
+    if set(src_norm.keys()) != set(tgt_norm.keys()):
+        return ckpt_path
+
+    aligned_sd = {}
+    for tgt_key in tgt_keys:
+        nkey = _norm_orig_mod_key(tgt_key)
+        aligned_sd[tgt_key] = src_sd[src_norm[nkey]]
+
+    ckpt["state_dict"] = aligned_sd
+
+    ckpt_dir = os.path.dirname(ckpt_path) or "."
+    fd, aligned_path = tempfile.mkstemp(
+        prefix=".resume_aligned_", suffix=".pt", dir=ckpt_dir
+    )
+    os.close(fd)
+    torch.save(ckpt, aligned_path)
+    print(
+        f"Adjusted checkpoint state_dict keys for current model format:\n"
+        f"  source={ckpt_path}\n  aligned={aligned_path}"
+    )
+    return aligned_path
 
 
 if __name__ == '__main__':
@@ -261,11 +304,15 @@ if __name__ == '__main__':
         callbacks=[lr_monitor],
     )
 
+    fit_ckpt_path = resume_ckpt_path
+    if resume_ckpt_path is not None:
+        fit_ckpt_path = _align_checkpoint_state_dict_for_model(resume_ckpt_path, model)
+
     trainer.fit(
         model=model,
         train_dataloaders=dataloader,
         val_dataloaders=dataloader_val,
-        ckpt_path=resume_ckpt_path,
+        ckpt_path=fit_ckpt_path,
     )
 
     # Save last:
