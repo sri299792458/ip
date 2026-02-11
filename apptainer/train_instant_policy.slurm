@@ -225,10 +225,17 @@ fi
 if [ -n "$BOOT_MODE" ]; then
   EXTRA_BOOT_FLAGS=""
   APPEND_BOOT_FLAG=""
+  BOOT_TASK_START=0
+  BOOT_NUM_TASKS_RUN="$BOOTSTRAP_NUM_TASKS"
   if [ "$BOOT_MODE" = "empty" ]; then
     echo "Training buffer empty, bootstrapping..."
   else
-    echo "Training buffer partially filled ($TRAIN_COUNT/$TRAIN_BUFFER_SIZE), topping up..."
+    BOOT_TASK_START="$TRAIN_COUNT"
+    BOOT_NUM_TASKS_RUN=$((TRAIN_BUFFER_SIZE - TRAIN_COUNT))
+    if [ "$BOOT_NUM_TASKS_RUN" -lt 1 ]; then
+      BOOT_NUM_TASKS_RUN=1
+    fi
+    echo "Training buffer partially filled ($TRAIN_COUNT/$TRAIN_BUFFER_SIZE), topping up $BOOT_NUM_TASKS_RUN tasks..."
     APPEND_BOOT_FLAG="--append"
   fi
   if [ "$BOOTSTRAP_FILL_BUFFER" = "1" ]; then
@@ -240,7 +247,8 @@ python -m ip.scripts.generate_pseudo_demos \
   --shapenet_path \"$SHAPENET_PATH\" \
   --shapenet_index_path \"$INDEX_PATH\" \
   --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $BOOTSTRAP_NUM_TASKS \
+  --num_tasks $BOOT_NUM_TASKS_RUN \
+  --task_start $BOOT_TASK_START \
   --seed $TRAIN_GEN_SEED \
   --storage_format trajectory \
   --pcd_storage_dtype $PCD_DTYPE \

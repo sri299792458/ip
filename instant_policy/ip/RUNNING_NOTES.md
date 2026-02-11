@@ -22,6 +22,7 @@ Make online W&B logging the default for the unified single-arm SLURM pipeline an
   - default `AUTO_RESUME` changed to `0` (resume is now explicit/opt-in).
   - train bootstrap default `TRAIN_NUM_TASKS` changed from `999999` to `TRAIN_BUFFER_SIZE`.
   - if ring buffer exists but is partially filled and `BOOTSTRAP_FILL_BUFFER=1`, bootstrap now auto top-ups with `--append --fill_buffer` until wrap.
+  - top-up now runs only missing tasks (`TRAIN_BUFFER_SIZE - TRAIN_COUNT`) and sets `--task_start=TRAIN_COUNT` so progress and seeds continue from where the previous run stopped.
   - added startup logging for `use_wandb`, `train_buffer_size`, `train_num_tasks`, `fill_buffer`.
   - when `BOOTSTRAP_FILL_BUFFER=1` and `TRAIN_NUM_TASKS < TRAIN_BUFFER_SIZE`, auto-adjust bootstrap task budget to `TRAIN_BUFFER_SIZE`.
   - exports `WANDB_MODE=online` by default when W&B is enabled (unless caller already set `WANDB_MODE`).
