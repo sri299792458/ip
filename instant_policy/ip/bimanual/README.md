@@ -29,8 +29,7 @@ No broad raw world-frame pose channels should be exposed as model shortcuts.
 ## Staged Build Plan
 
 1. M0: contracts + frame ops + invariance check utilities (done)
-2. M1: bimanual graph representation with per-arm local subgraphs + cross-arm edges
+2. M1: bimanual graph representation with per-arm local subgraphs + cross-arm edges (done: `graph_rep.py`)
 3. M2: bimanual model and diffusion wrapper with relative labels only
 4. M3: dataset adapter that emits contract-compliant batches
 5. M4: train/eval entrypoints and smoke tests
-

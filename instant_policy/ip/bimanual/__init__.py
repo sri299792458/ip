@@ -19,6 +19,7 @@ from .frame_ops import (
     world_to_local_points,
     check_global_relabel_invariance,
 )
+from .graph_rep import BimanualGraphConfig, BimanualGraphRep
 
 __all__ = [
     "BimanualObservation",
@@ -30,5 +31,6 @@ __all__ = [
     "transform_points",
     "world_to_local_points",
     "check_global_relabel_invariance",
+    "BimanualGraphConfig",
+    "BimanualGraphRep",
 ]
-
