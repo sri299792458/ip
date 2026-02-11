@@ -99,3 +99,15 @@ Restart bimanual implementation from first principles with a strict frame contra
 ### Why
 - Establishes an executable training bridge while keeping all supervision relative/local.
 - Lets us validate end-to-end data+model plumbing before adding full DDIM denoising loops.
+
+## Smoke Script Added (2026-02-11)
+
+### Changed
+- Added `instant_policy/ip/scripts/smoke_bimanual.py`:
+  - builds synthetic world batch,
+  - runs one `BimanualGraphDiffusionScaffold.training_step(...)`,
+  - prints `smoke_ok` and loss.
+- Documented command in `instant_policy/ip/bimanual/README.md`.
+
+### Why
+- Gives a one-command sanity check for the reboot stack on any environment with the `ip` package installed.

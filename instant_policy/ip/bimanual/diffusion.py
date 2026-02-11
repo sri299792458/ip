@@ -73,9 +73,10 @@ class BimanualGraphDiffusionScaffold(L.LightningModule):
         loss_right = self.loss_fn(preds["delta_right"], gt_right)
         loss = 0.5 * (loss_left + loss_right)
 
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/loss_left", loss_left, on_step=True, on_epoch=True)
-        self.log("train/loss_right", loss_right, on_step=True, on_epoch=True)
+        if self._trainer is not None:
+            self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+            self.log("train/loss_left", loss_left, on_step=True, on_epoch=True)
+            self.log("train/loss_right", loss_right, on_step=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int):
@@ -88,9 +89,10 @@ class BimanualGraphDiffusionScaffold(L.LightningModule):
         loss_right = self.loss_fn(preds["delta_right"], gt_right)
         loss = 0.5 * (loss_left + loss_right)
 
-        self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/loss_left", loss_left, on_step=False, on_epoch=True)
-        self.log("val/loss_right", loss_right, on_step=False, on_epoch=True)
+        if self._trainer is not None:
+            self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("val/loss_left", loss_left, on_step=False, on_epoch=True)
+            self.log("val/loss_right", loss_right, on_step=False, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -99,4 +101,3 @@ class BimanualGraphDiffusionScaffold(L.LightningModule):
             lr=self.cfg.lr,
             weight_decay=self.cfg.weight_decay,
         )
-
