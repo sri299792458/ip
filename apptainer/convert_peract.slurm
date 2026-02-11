@@ -12,14 +12,37 @@
 
 set -euo pipefail
 
-# Resolve from script location (not submit cwd) so absolute sbatch paths are reliable.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+resolve_runner() {
+  if [ -n "${RUNNER:-}" ] && [ -x "$RUNNER" ]; then
+    printf "%s\n" "$RUNNER"
+    return 0
+  fi
+
+  local candidates=()
+  if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    candidates+=("$SLURM_SUBMIT_DIR/apptainer/run_instant_policy.sh")
+    candidates+=("$SLURM_SUBMIT_DIR/run_instant_policy.sh")
+  fi
+  candidates+=("$PWD/apptainer/run_instant_policy.sh")
+  candidates+=("$PWD/run_instant_policy.sh")
+  candidates+=("$SCRIPT_DIR/run_instant_policy.sh")
+
+  local c
+  for c in "${candidates[@]}"; do
+    if [ -x "$c" ]; then
+      printf "%s\n" "$c"
+      return 0
+    fi
+  done
+  return 1
+}
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTANT_POLICY_DIR=${INSTANT_POLICY_DIR:-$REPO_ROOT/instant_policy}
 PROJECT_DIR=${PROJECT_DIR:-$REPO_ROOT}
 DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
-RUNNER=${RUNNER:-$SCRIPT_DIR/run_instant_policy.sh}
+RUNNER="$(resolve_runner || true)"
 
 NUM_DEMOS=${NUM_DEMOS:-2}
 NUM_WAYPOINTS=${NUM_WAYPOINTS:-10}
@@ -52,7 +75,11 @@ TASKS=(
 )
 
 if [ ! -x "$RUNNER" ]; then
-  echo "ERROR: runner not found or not executable: $RUNNER"
+  echo "ERROR: runner not found or not executable: ${RUNNER:-<unset>}"
+  echo "Tried candidates under:"
+  echo "  SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-<unset>}"
+  echo "  PWD=$PWD"
+  echo "  SCRIPT_DIR=$SCRIPT_DIR"
   exit 1
 fi
 

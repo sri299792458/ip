@@ -11,10 +11,33 @@
 
 set -euo pipefail
 
-# Resolve from script location (not submit cwd) so absolute sbatch paths are reliable.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+resolve_runner() {
+  if [ -n "${RUNNER:-}" ] && [ -x "$RUNNER" ]; then
+    printf "%s\n" "$RUNNER"
+    return 0
+  fi
 
-RUNNER=${RUNNER:-$SCRIPT_DIR/run_instant_policy.sh}
+  local candidates=()
+  if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    candidates+=("$SLURM_SUBMIT_DIR/apptainer/run_instant_policy.sh")
+    candidates+=("$SLURM_SUBMIT_DIR/run_instant_policy.sh")
+  fi
+  candidates+=("$PWD/apptainer/run_instant_policy.sh")
+  candidates+=("$PWD/run_instant_policy.sh")
+  candidates+=("$SCRIPT_DIR/run_instant_policy.sh")
+
+  local c
+  for c in "${candidates[@]}"; do
+    if [ -x "$c" ]; then
+      printf "%s\n" "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+RUNNER="$(resolve_runner || true)"
 DATA_DIR=${DATA_DIR:-/scratch.global/$USER/ips}
 
 MAX_STEPS=${MAX_STEPS:-50000}
@@ -27,6 +50,15 @@ WANDB_ENTITY=${WANDB_ENTITY:-}
 WANDB_RUN_NAME=${WANDB_RUN_NAME:-lang_train}
 
 mkdir -p "$DATA_DIR/logs"
+
+if [ ! -x "$RUNNER" ]; then
+  echo "ERROR: runner not found or not executable: ${RUNNER:-<unset>}"
+  echo "Tried candidates under:"
+  echo "  SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-<unset>}"
+  echo "  PWD=$PWD"
+  echo "  SCRIPT_DIR=$SCRIPT_DIR"
+  exit 1
+fi
 
 WANDB_ARGS=""
 if [ "$USE_WANDB" -eq 1 ]; then
