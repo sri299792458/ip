@@ -155,28 +155,6 @@ python -m ip.scripts.generate_pseudo_demos \
   --render_video_dir /scratch/.../pseudo/videos
 ```
 
-Attach-gate tuning sweep (no rendering, metrics only):
-
-```bash
-python -m ip.scripts.tune_attach_gates \
-  --shapenet_path /scratch.global/$USER/ShapeNetCore.v2 \
-  --shapenet_index_path /scratch/.../pseudo_ring/shapenet_index.json \
-  --gripper_mesh_path /scratch/.../robotiq_2f85_collision_open.obj \
-  --num_tasks 20 \
-  --num_demos_per_task 2 \
-  --attach_capture_min_points_grid 2 3 4 5 \
-  --hard_negative_offset_scale 0.35 \
-  --hard_negative_offset_min_m 0.04 \
-  --hard_negative_offset_max_m 0.12 \
-  --out_json /scratch/.../pseudo_debug/attach_tuning.json \
-  --out_csv /scratch/.../pseudo_debug/attach_tuning.csv
-```
-
-Notes:
-- By default, hard-negative probes use object-scale offsets (`scale * object_extent`, clamped by min/max).
-- Use `--hard_negative_offset_m` only when you explicitly want a fixed offset across all object sizes.
-- Ranking now penalizes ambiguous/wrong-object eligibility, not just target attach recall.
-
 Render one video per task category (debug):
 
 ```bash
@@ -204,9 +182,9 @@ Important:
 
 Recommended starting point for trajectory mode:
 - `buffer_size=8192`
-- `num_shards=8`
-- `num_tasks=999999` (continuous loop)
-- `fill_buffer` for first pass, then remove it for overwrite mode
+- `num_shards=1`
+- `num_tasks=999999` (single-worker continuous source)
+- in MSI usage, prefer `apptainer/train_instant_policy.slurm` which bootstraps/train in one flow
 
 `pcd_storage_dtype` guidance:
 - start with `float32` for maximal fidelity

@@ -11,6 +11,30 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Single SLURM Pipeline Cleanup (2026-02-11)
+
+### Decision
+Keep exactly one SLURM entrypoint for pseudo-data + training and remove sweep-oriented helper scripts.
+
+### Changed
+- kept `apptainer/train_instant_policy.slurm` as the only SLURM flow (bootstrap pseudo train/val + train/resume).
+- removed:
+  - `apptainer/generate_pseudo_buffer.slurm`
+  - `apptainer/generate_pseudo_val.slurm`
+  - `ip/scripts/tune_attach_gates.py`
+  - `ip/scripts/estimate_ring_buffer_plan.py`
+- updated:
+  - `apptainer/README_instant_policy.md` to document only the single-script workflow.
+  - `ip/generation/README.md` to drop attach-gate sweep instructions.
+
+### Why
+- Reduce operational clutter and force one reproducible path on MSI.
+- Remove tuning/sweep detours from the default workflow.
+
+### User-visible Effect
+- `sbatch apptainer/train_instant_policy.slurm` is now the single command path.
+- No separate pseudo-generation or sweep scripts remain in the repo.
+
 ## Front-Only Capture Attach (2026-02-11)
 
 ### Decision
@@ -38,6 +62,71 @@ front-only jaw-capture attach on close transition.
 ### User-visible Effect
 - Pseudo grasps are now constrained to the front jaw region only.
 - CLI/config surface is cleaner: no radius parameter for grasp attachment.
+
+## Ring Buffer + Walltime Planner (2026-02-11)
+
+### Decision
+Add a dedicated planning utility for selecting trajectory ring-buffer size and estimating SLURM walltime before large training runs.
+
+### Changed
+- Added `ip/scripts/estimate_ring_buffer_plan.py`.
+  - accepts measured train throughput (`train_steps_per_sec`) and pseudo generation throughput (`gen_tasks_per_sec_per_shard` or `gen_seconds_per_task_per_shard`).
+  - evaluates multiple candidate ring sizes and reports:
+    - per-shard task counts,
+    - steps per epoch,
+    - estimated fill/refresh time,
+    - estimated pseudo demos in ring,
+    - estimated disk usage (if task size is known).
+  - estimates total training walltime for `num_iters` and recommends request time with safety factor.
+  - optional task-dir probing to infer `avg_task_size_mb`, `avg_demos_per_task`, and `avg_frames_per_demo`.
+  - optional JSON export for reproducible planning.
+- Updated `apptainer/README_instant_policy.md` with planner usage examples.
+- Updated `apptainer/generate_pseudo_buffer.slurm` and `apptainer/generate_pseudo_val.slurm`
+  to expose `DEMOS_PER_TASK_MIN/MAX` as sbatch-exportable knobs.
+- Updated `ip/train.py` + `apptainer/train_instant_policy.slurm` to support
+  `num_iters_override` / `NUM_ITERS_OVERRIDE` for short throughput benchmark runs.
+
+### Why
+- Ring size and SLURM walltime choices were previously manual and easy to mis-size.
+- Planning from measured rates gives a defensible request and avoids over/under-allocating MSI jobs.
+
+### User-visible Effect
+- You can now compute buffer-size tradeoffs and walltime requests from first principles in one command.
+
+## Training Resume + W&B Robustness (2026-02-11)
+
+### Decision
+Make 24-hour-chunk training resumable with full trainer state, and clean up logging behavior.
+
+### Changed
+- `ip/train.py`
+  - parses args once (removed repeated `parse_args()` calls).
+  - initializes logger safely even when `record=1` and `use_wandb=0`.
+  - added full-resume args:
+    - `--resume_ckpt_path`
+    - `--auto_resume` (latest checkpoint in `<save_path>/<run_name>`)
+  - added W&B resume args:
+    - `--wandb_id`
+    - `--wandb_resume {allow,must,never}`
+  - `trainer.fit(..., ckpt_path=...)` now uses resume checkpoint when requested.
+- `apptainer/train_instant_policy.slurm`
+  - added env knobs:
+    - `AUTO_RESUME`
+    - `RESUME_CKPT`
+    - `WANDB_ID`
+    - `WANDB_RESUME`
+  - wires resume and wandb args through to `ip/train.py`.
+- `apptainer/README_instant_policy.md`
+  - added documented 24h resume workflow commands.
+
+### Why
+- MSI walltime cap requires continuing long runs across multiple jobs.
+- Warm-start alone (`fine_tune`) does not restore trainer step/optimizer state.
+- Logging needed to be robust in non-W&B runs.
+
+### User-visible Effect
+- You can continue the same training run across multiple 24h jobs with true checkpoint resume.
+- W&B run continuation is supported when an existing run id is provided.
 
 ## Attach Defaults Update (2026-02-10)
 

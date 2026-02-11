@@ -37,41 +37,36 @@ cd ~/ip/apptainer
 ./run_instant_policy.sh python train_language.py --help
 ```
 
-## Pseudo-Demo Ring Buffer Pipeline (Trajectory Format)
+## Single SLURM Pipeline (Pseudo + Train)
 
-This is the paper-style setup: continuously regenerate pseudo-tasks into a
-fixed-size task buffer and train from `task_*.pt`.
+Use only this script:
 
-1) Fill the sharded ring buffer once:
-```bash
-cd ~/ip/apptainer
-sbatch generate_pseudo_buffer.slurm
-```
-
-Default behavior:
-- 8 shards (`--array=0-7%4`), each writing a disjoint index range.
-- trajectory storage (`task_*.pt`) in `/scratch.global/$USER/ips/pseudo_ring/task_buffer`.
-- ring fill mode enabled (`FILL_BUFFER=1`) until each shard wraps once.
-
-2) Start continuous overwrite generation (after initial fill):
-```bash
-cd ~/ip/apptainer
-sbatch --export=ALL,FILL_BUFFER=0,APPEND=1 generate_pseudo_buffer.slurm
-```
-
-3) Build a fixed validation pseudo set:
-```bash
-cd ~/ip/apptainer
-sbatch generate_pseudo_val.slurm
-```
-
-4) Train policy on trajectory data:
 ```bash
 cd ~/ip/apptainer
 sbatch train_instant_policy.slurm
 ```
 
+What this one job does:
+- ensures Robotiq mesh exists (`MESH_PATH`)
+- builds validation pseudo set if missing (`VAL_DATA_DIR`)
+- bootstraps train ring buffer if empty (`TRAIN_DATA_DIR`)
+- optionally refreshes ring buffer before train
+- starts training (or resumes) in the same job
+
+Resume across 24h jobs (same run name):
+```bash
+cd ~/ip/apptainer
+sbatch --export=ALL,RUN_NAME=my_run,RECORD=1,AUTO_RESUME=1 train_instant_policy.slurm
+```
+
+Optional explicit checkpoint resume:
+```bash
+cd ~/ip/apptainer
+sbatch --export=ALL,RUN_NAME=my_run,RECORD=1,RESUME_CKPT=/workspace/data/runs_policy/my_run/last.pt train_instant_policy.slurm
+```
+
 Important defaults for training script:
+- ShapeNet path: `/workspace/data/ShapeNetCore.v2`
 - train data: `/workspace/data/pseudo_ring/task_buffer`
 - val data: `/workspace/data/pseudo_ring/val`
 - format: `trajectory`
@@ -81,10 +76,20 @@ You can override any script variable with `sbatch --export=ALL,KEY=VALUE,...`.
 
 Example overrides:
 ```bash
-sbatch --export=ALL,BUFFER_SIZE=300000,NUM_SHARDS=8 generate_pseudo_buffer.slurm
-sbatch --export=ALL,VAL_NUM_TASKS=500 generate_pseudo_val.slurm
 sbatch --export=ALL,RUN_NAME=ring_bs32,BATCH_SIZE=32 train_instant_policy.slurm
+sbatch --export=ALL,RUN_NAME=ring_bs32,RECORD=1,AUTO_RESUME=1,WANDB_ID=<existing_wandb_id>,WANDB_RESUME=allow train_instant_policy.slurm
+sbatch --export=ALL,SHAPENET_PATH=/workspace/data/shapenet train_instant_policy.slurm
+sbatch --export=ALL,TRAIN_BUFFER_SIZE=50000,DEMOS_PER_TASK_MIN=3,DEMOS_PER_TASK_MAX=5 train_instant_policy.slurm
+sbatch --export=ALL,VAL_FORCE_REBUILD=1,VAL_NUM_TASKS=300 train_instant_policy.slurm
+sbatch --export=ALL,NUM_ITERS_OVERRIDE=50000,RECORD=0,USE_WANDB=0 train_instant_policy.slurm
 ```
+
+Core pseudo-data knobs:
+- `TRAIN_BUFFER_SIZE` (default `8192`)
+- `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `3/3`)
+- `PCD_DTYPE` (default `float16`)
+- `VAL_NUM_TASKS` (default `100`)
+- `VAL_TASK_START` (default `200000000`)
 
 ## Key Runtime Behavior (Why It Works)
 

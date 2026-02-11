@@ -10,6 +10,29 @@ from lightning.pytorch.loggers import WandbLogger
 import argparse
 from glob import glob
 
+
+def _latest_resume_checkpoint(save_dir: str):
+    if not os.path.isdir(save_dir):
+        return None
+    last_ckpt = os.path.join(save_dir, "last.pt")
+    if os.path.isfile(last_ckpt):
+        return last_ckpt
+
+    numbered = []
+    for path in glob(os.path.join(save_dir, "*.pt")):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if stem.isdigit():
+            numbered.append((int(stem), path))
+    if numbered:
+        numbered.sort(key=lambda x: x[0])
+        return numbered[-1][1]
+
+    best_ckpt = os.path.join(save_dir, "best.pt")
+    if os.path.isfile(best_ckpt):
+        return best_ckpt
+    return None
+
+
 if __name__ == '__main__':
     ####################################################################################################################
     # Args
@@ -45,44 +68,94 @@ if __name__ == '__main__':
                         help='Translation spacing for subsample_live (trajectory format only).')
     parser.add_argument('--live_spacing_rot', type=float, default=3.0,
                         help='Rotation spacing (degrees) for subsample_live (trajectory format only).')
+    parser.add_argument('--num_iters_override', type=int, default=None,
+                        help='Optional override for total training steps (useful for throughput benchmarking).')
+    parser.add_argument('--resume_ckpt_path', type=str, default=None,
+                        help='Resume full trainer state from this checkpoint path.')
+    parser.add_argument('--auto_resume', action='store_true',
+                        help='Auto-resume from latest checkpoint in <save_path>/<run_name>.')
+    parser.add_argument('--wandb_id', type=str, default=None,
+                        help='Optional W&B run id to resume the same online run.')
+    parser.add_argument('--wandb_resume', type=str, default='allow', choices=['allow', 'must', 'never'],
+                        help='W&B resume policy when wandb logging is enabled.')
 
-    record = bool(parser.parse_args().record)
-    use_wandb = bool(parser.parse_args().use_wandb)
-    fine_tune = bool(parser.parse_args().fine_tune)
-    compile_models = bool(parser.parse_args().compile_models)
-    run_name = parser.parse_args().run_name
-    save_path = parser.parse_args().save_path
-    model_path = parser.parse_args().model_path
-    model_name = parser.parse_args().model_name
-    data_path_train = parser.parse_args().data_path_train
-    data_path_val = parser.parse_args().data_path_val
-    data_format = parser.parse_args().data_format
-    num_points = parser.parse_args().num_points
-    subsample_live = parser.parse_args().subsample_live
-    live_spacing_trans = parser.parse_args().live_spacing_trans
-    live_spacing_rot = parser.parse_args().live_spacing_rot
-    bs = parser.parse_args().batch_size
+    args = parser.parse_args()
+
+    record = bool(args.record)
+    use_wandb = bool(args.use_wandb)
+    fine_tune = bool(args.fine_tune)
+    compile_models = bool(args.compile_models)
+    run_name = args.run_name
+    save_path = args.save_path
+    model_path = args.model_path
+    model_name = args.model_name
+    data_path_train = args.data_path_train
+    data_path_val = args.data_path_val
+    data_format = args.data_format
+    num_points = args.num_points
+    subsample_live = args.subsample_live
+    live_spacing_trans = args.live_spacing_trans
+    live_spacing_rot = args.live_spacing_rot
+    num_iters_override = args.num_iters_override
+    bs = args.batch_size
     ####################################################################################################################
     save_dir = f'{save_path}/{run_name}' if record else None
+    resume_search_dir = os.path.join(save_path, run_name)
+    resume_ckpt_path = args.resume_ckpt_path
 
     if record and not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    if fine_tune:
-        config = pickle.load(open(f'{model_path}/config.pkl', 'rb'))
-        config['compile_models'] = False
-        config['batch_size'] = bs
-        config['save_dir'] = save_dir
-        config['record'] = record
-        # TODO: Here you can change other parameter from the ones used to train initial model.
-        model = GraphDiffusion.load_from_checkpoint(f'{model_path}/{model_name}', config=config, strict=True,
-                                                    map_location=config['device']).to(config['device'])
-        if compile_models:
-            model.model.compile_models()
+    if args.auto_resume and resume_ckpt_path is None:
+        resume_ckpt_path = _latest_resume_checkpoint(resume_search_dir)
+        if resume_ckpt_path is None:
+            raise RuntimeError(
+                f"--auto_resume requested, but no checkpoint found in {resume_search_dir}"
+            )
+
+    if resume_ckpt_path is not None and not os.path.isfile(resume_ckpt_path):
+        raise RuntimeError(f"Resume checkpoint not found: {resume_ckpt_path}")
+
+    if resume_ckpt_path is not None:
+        # For true resume, use the run-local config when available.
+        resume_cfg_path = os.path.join(os.path.dirname(resume_ckpt_path), 'config.pkl')
+        if os.path.isfile(resume_cfg_path):
+            cfg = pickle.load(open(resume_cfg_path, 'rb'))
+        elif fine_tune:
+            cfg = pickle.load(open(f'{model_path}/config.pkl', 'rb'))
+        else:
+            cfg = dict(config)
+        cfg['compile_models'] = False
+        cfg['batch_size'] = bs
+        cfg['save_dir'] = save_dir
+        cfg['record'] = record
+        model = GraphDiffusion(cfg).to(cfg['device'])
     else:
-        config['save_dir'] = save_dir
-        config['record'] = record
-        model = GraphDiffusion(config).to(config['device'])
+        if fine_tune:
+            cfg = pickle.load(open(f'{model_path}/config.pkl', 'rb'))
+            cfg['compile_models'] = False
+            cfg['batch_size'] = bs
+            cfg['save_dir'] = save_dir
+            cfg['record'] = record
+            # Warm-start from checkpoint weights (not trainer-state resume).
+            model = GraphDiffusion.load_from_checkpoint(
+                f'{model_path}/{model_name}',
+                config=cfg,
+                strict=True,
+                map_location=cfg['device'],
+            ).to(cfg['device'])
+            if compile_models:
+                model.model.compile_models()
+        else:
+            cfg = dict(config)
+            cfg['save_dir'] = save_dir
+            cfg['record'] = record
+            model = GraphDiffusion(cfg).to(cfg['device'])
+
+    if num_iters_override is not None:
+        if int(num_iters_override) < 1:
+            raise ValueError('--num_iters_override must be >= 1')
+        cfg['num_iters'] = int(num_iters_override)
     ####################################################################################################################
     if data_format == 'trajectory':
         val_count = len(glob(os.path.join(data_path_val, 'task_*.pt')))
@@ -90,9 +163,9 @@ if __name__ == '__main__':
         dset_val = TrajectoryDataset(
             data_path_val,
             num_samples=val_count,
-            num_demos=config['num_demos'],
-            traj_horizon=config['traj_horizon'],
-            pred_horizon=config['pre_horizon'],
+            num_demos=cfg['num_demos'],
+            traj_horizon=cfg['traj_horizon'],
+            pred_horizon=cfg['pre_horizon'],
             num_points=num_points,
             rand_g_prob=0.0,
             subsample_live=subsample_live,
@@ -102,17 +175,17 @@ if __name__ == '__main__':
         dset = TrajectoryDataset(
             data_path_train,
             num_samples=train_count,
-            num_demos=config['num_demos'],
-            traj_horizon=config['traj_horizon'],
-            pred_horizon=config['pre_horizon'],
+            num_demos=cfg['num_demos'],
+            traj_horizon=cfg['traj_horizon'],
+            pred_horizon=cfg['pre_horizon'],
             num_points=num_points,
-            rand_g_prob=config['randomize_g_prob'],
+            rand_g_prob=cfg['randomize_g_prob'],
             subsample_live=subsample_live,
             live_spacing_trans=live_spacing_trans,
             live_spacing_rot=live_spacing_rot,
         )
         dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
-        dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
+        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True,
                                 num_workers=8, pin_memory=True)
     else:
         val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
@@ -120,26 +193,32 @@ if __name__ == '__main__':
         dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0)
         dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
 
-        dset = RunningDataset(data_path_train, train_count, rand_g_prob=config['randomize_g_prob'])
-        dataloader = DataLoader(dset, batch_size=config['batch_size'], drop_last=True, shuffle=True,
+        dset = RunningDataset(data_path_train, train_count, rand_g_prob=cfg['randomize_g_prob'])
+        dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True,
                                 num_workers=8, pin_memory=True)
     ####################################################################################################################
+    logger = None
     if record:
         if use_wandb:
-            logger = WandbLogger(project='Instant Policy',
-                                 name=f'{run_name}',
-                                 save_dir=save_dir,
-                                 log_model=False)
+            wandb_kwargs = {
+                'project': 'Instant Policy',
+                'name': f'{run_name}',
+                'save_dir': save_dir,
+                'log_model': False,
+                'resume': args.wandb_resume,
+            }
+            if args.wandb_id is not None:
+                wandb_kwargs['id'] = args.wandb_id
+            logger = WandbLogger(**wandb_kwargs)
         # Dump config to save_dir
-        pickle.dump(config, open(f'{save_dir}/config.pkl', 'wb'))
-    else:
-        logger = None
+        pickle.dump(cfg, open(f'{save_dir}/config.pkl', 'wb'))
+
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = L.Trainer(
         enable_checkpointing=False,  # We save the models manually.
-        accelerator=config['device'],
+        accelerator=cfg['device'],
         devices=1,
-        max_steps=config['num_iters'],
+        max_steps=cfg['num_iters'],
         enable_progress_bar=True,
         precision='16-mixed',
         val_check_interval=20000,  # TODO: might want to change that.
@@ -156,6 +235,7 @@ if __name__ == '__main__':
         model=model,
         train_dataloaders=dataloader,
         val_dataloaders=dataloader_val,
+        ckpt_path=resume_ckpt_path,
     )
 
     # Save last:
