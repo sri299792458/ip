@@ -28,7 +28,7 @@ Restart bimanual implementation from first principles with a strict frame contra
 1. **M0 (current)**: contracts + frame ops + invariance utilities.
 2. **M1 (current)**: bimanual graph representation with local per-arm subgraphs + cross-arm edges.
 3. **M2 (current)**: bimanual model heads and diffusion wrapper (relative targets only).
-4. **M3**: dataset adapter with strict assertions on frame semantics.
+4. **M3 (current)**: dataset adapter with strict assertions on frame semantics.
 5. **M4**: training entrypoint + smoke tests.
 
 ### Non-Negotiables
@@ -69,3 +69,19 @@ Restart bimanual implementation from first principles with a strict frame contra
 ### Why
 - Provides a runnable pre-diffusion bimanual model layer on top of M1 graph construction.
 - Keeps outputs directly aligned with relative-action formulation needed for diffusion training later.
+
+## M3 World->Relative Adapter Implemented (2026-02-11)
+
+### Changed
+- Added `instant_policy/ip/bimanual/data_adapter.py`:
+  - `BimanualWorldBatch` with shape/contract validation,
+  - `build_obs_targets(...)`:
+    - builds local observation (`P^L`, `P^R`, `T_L_R`) from world tensors,
+    - builds per-arm relative targets (`DeltaT_L`, `DeltaT_R`) via
+      `T_curr^-1 @ T_future`,
+  - `relabel_world(...)` helper for global-frame relabeling checks.
+- Exported adapter symbols from `instant_policy/ip/bimanual/__init__.py`.
+
+### Why
+- Locks the data path to first-principles relative semantics before adding diffusion training code.
+- Prevents accidental world-frame leakage at the dataset boundary.
