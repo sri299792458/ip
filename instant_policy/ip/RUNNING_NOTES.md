@@ -1,6 +1,6 @@
 # Deployment Running Notes
 
-Last updated: 2026-02-11
+Last updated: 2026-02-12
 
 ## Log Discipline
 
@@ -10,6 +10,29 @@ Keep this file as the canonical deployment decision log.
 ### Rule
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
+
+## Bootstrap Target + Fill Fix (2026-02-12)
+
+### Decision
+Restore minimal bootstrap default and fix `steps` fill-buffer wrap behavior.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - default `MIN_BOOTSTRAP_ITEMS` now follows `MIN_BOOTSTRAP_TASKS` (default `512`) instead of `TRAIN_BUFFER_SIZE`.
+  - header comment updated to reflect minimal bootstrap default.
+- `ip/generation/pseudo_demo_generator.py`
+  - in `steps` mode with `fill_buffer`, overflow now places final sample flush to shard end before returning.
+  - this removes the tail-hole condition that could plateau fill counts (e.g., `8060/8192`).
+- `apptainer/README_instant_policy.md`
+  - updated bootstrap defaults (`MIN_BOOTSTRAP_TASKS=512`, `MIN_BOOTSTRAP_ITEMS` alias).
+
+### Why
+- Full-ring bootstrap (`8192`) was slower than needed for startup.
+- Previous wrap logic in `fill_buffer` could skip trailing indices and never reach target on retries.
+
+### User-visible Effect
+- Default startup uses minimal bootstrap (`512`) and reaches target reliably.
+- No repeated bootstrap loops stuck at a fixed partial count.
 
 ## Single-GPU Paper-Parity Data Path Fix (2026-02-11)
 
@@ -68,7 +91,7 @@ prebuilt step samples (`data_*.pt`) with continuous overwrite generation.
     - `TRAIN_VAL_CHECK_INTERVAL=20000`
     - `TRAIN_LOG_EVERY_N_STEPS=500` (unchanged, already aligned)
   - bootstrap now uses ring-fill semantics for `steps` mode:
-    - target defaults to `MIN_BOOTSTRAP_ITEMS=TRAIN_BUFFER_SIZE`,
+    - target is controlled by `MIN_BOOTSTRAP_ITEMS`,
     - uses `--buffer_size $MIN_BOOTSTRAP_ITEMS --fill_buffer`,
     - re-counts after each attempt until target is reached (bounded retries).
   - `GEN_FORCE_SOFTWARE_RENDERING` default set to `0` (opt-in only).

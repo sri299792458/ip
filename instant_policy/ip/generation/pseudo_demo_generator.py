@@ -741,8 +741,13 @@ class PseudoDemoGenerator:
                     shard_size = shard_end - shard_start
                     if live_len >= shard_size:
                         raise RuntimeError("Sample length exceeds shard size. Increase buffer_size.")
-                    if offset + live_len >= shard_end:
-                        offset = shard_start
+                    if offset + live_len > shard_end:
+                        if fill_buffer:
+                            # For bootstrap fill, place the sample flush to shard end
+                            # so trailing indices are not left permanently empty.
+                            offset = max(shard_start, shard_end - live_len)
+                        else:
+                            offset = shard_start
                         wrapped = True
                 save_sample(sample, save_dir=save_dir, offset=offset, scene_encoder=self.scene_encoder)
                 offset += live_len

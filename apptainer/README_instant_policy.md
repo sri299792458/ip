@@ -49,7 +49,7 @@ sbatch train_instant_policy.slurm
 What this one job does:
 - ensures Robotiq mesh exists (`MESH_PATH`)
 - builds validation pseudo set if missing (`VAL_DATA_DIR`)
-- bootstraps train ring buffer to target size (`TRAIN_DATA_DIR`)
+- bootstraps train ring buffer to minimal target size (`TRAIN_DATA_DIR`)
 - runs continuous ring overwrite generation during training
 - starts training (or resumes) in the same job
 
@@ -91,7 +91,8 @@ Resume defaults:
 
 Core pseudo-data knobs:
 - `TRAIN_BUFFER_SIZE` (default `8192`)
-- `MIN_BOOTSTRAP_ITEMS` (default `TRAIN_BUFFER_SIZE`)
+- `MIN_BOOTSTRAP_TASKS` (default `512`, backward-compatible alias)
+- `MIN_BOOTSTRAP_ITEMS` (default `MIN_BOOTSTRAP_TASKS`)
 - `GEN_NUM_SHARDS` / `GEN_CHUNK_TASKS` (continuous producer parallelism)
 - `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `3/3`)
 - `PCD_DTYPE` (default `float16`)

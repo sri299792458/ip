@@ -9,7 +9,7 @@
 #   /scratch.global/$USER/ips/logs/ip_gen_${SLURM_JOB_ID}_shard*.log
 #
 # Defaults are chosen for one clean pipeline (no offline full fill):
-# - Bootstrap ring to target item count (default: TRAIN_BUFFER_SIZE)
+# - Bootstrap ring to minimal target item count (default: MIN_BOOTSTRAP_TASKS=512)
 # - Continuous sharded generation (single shard by default for 1-GPU runs)
 # - Ring buffer overwrite behavior via --buffer_size
 #SBATCH -A kdesingh
@@ -93,7 +93,7 @@ TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
 # - Old env used MIN_BOOTSTRAP_TASKS.
 # - New name reflects count of files in active DATA_FORMAT.
 MIN_BOOTSTRAP_TASKS=${MIN_BOOTSTRAP_TASKS:-512}
-MIN_BOOTSTRAP_ITEMS=${MIN_BOOTSTRAP_ITEMS:-$TRAIN_BUFFER_SIZE}
+MIN_BOOTSTRAP_ITEMS=${MIN_BOOTSTRAP_ITEMS:-$MIN_BOOTSTRAP_TASKS}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
