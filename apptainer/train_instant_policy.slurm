@@ -82,6 +82,7 @@ NUM_ITERS_OVERRIDE=${NUM_ITERS_OVERRIDE:-}
 TRAIN_NUM_WORKERS=${TRAIN_NUM_WORKERS:-8}
 TRAIN_PERSISTENT_WORKERS=${TRAIN_PERSISTENT_WORKERS:-1}
 TRAIN_PREFETCH_FACTOR=${TRAIN_PREFETCH_FACTOR:-4}
+TRAIN_SAMPLE_CACHE_SIZE=${TRAIN_SAMPLE_CACHE_SIZE:-2048}
 TRAIN_VAL_CHECK_INTERVAL=${TRAIN_VAL_CHECK_INTERVAL:-20000}
 TRAIN_LOG_EVERY_N_STEPS=${TRAIN_LOG_EVERY_N_STEPS:-500}
 TRAIN_DEVICES=${TRAIN_DEVICES:-1}
@@ -339,6 +340,7 @@ echo "shapenet_path=$SHAPENET_PATH (host: $HOST_SHAPENET)"
 echo "auto_resume=$AUTO_RESUME use_wandb=$USE_WANDB"
 echo "compile_models=$COMPILE_MODELS devices=$TRAIN_DEVICES strategy=$TRAIN_STRATEGY"
 echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interval=$TRAIN_VAL_CHECK_INTERVAL"
+echo "sample_cache_size=$TRAIN_SAMPLE_CACHE_SIZE"
 echo "ring_buffer_size=$TRAIN_BUFFER_SIZE train_start_min_items=$TRAIN_START_MIN_ITEMS timeout_s=$TRAIN_START_TIMEOUT_SEC"
 echo "generator=single chunk_tasks=$GEN_CHUNK_TASKS"
 echo "data_file_glob=$DATA_FILE_GLOB storage_format=$GEN_STORAGE_FORMAT gen_force_software=$GEN_FORCE_SOFTWARE_RENDERING"
@@ -526,6 +528,7 @@ python /workspace/instant_policy/ip/train.py \
   --num_workers $TRAIN_NUM_WORKERS \
   --persistent_workers $TRAIN_PERSISTENT_WORKERS \
   --prefetch_factor $TRAIN_PREFETCH_FACTOR \
+  --sample_cache_size $TRAIN_SAMPLE_CACHE_SIZE \
   --val_check_interval $TRAIN_VAL_CHECK_INTERVAL \
   --log_every_n_steps $TRAIN_LOG_EVERY_N_STEPS \
   --devices $TRAIN_DEVICES \

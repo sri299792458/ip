@@ -126,6 +126,8 @@ if __name__ == '__main__':
                         help='Use persistent DataLoader workers when num_workers > 0 [0, 1].')
     parser.add_argument('--prefetch_factor', type=int, default=4,
                         help='DataLoader prefetch_factor when num_workers > 0.')
+    parser.add_argument('--sample_cache_size', type=int, default=0,
+                        help='Per-worker LRU cache size for loaded data_*.pt samples (0 disables cache).')
     parser.add_argument('--val_check_interval', type=int, default=20000,
                         help='Validation check interval in optimizer steps.')
     parser.add_argument('--log_every_n_steps', type=int, default=500,
@@ -160,6 +162,7 @@ if __name__ == '__main__':
     num_workers = int(args.num_workers)
     persistent_workers = bool(args.persistent_workers)
     prefetch_factor = int(args.prefetch_factor)
+    sample_cache_size = int(args.sample_cache_size)
     val_check_interval = int(args.val_check_interval)
     log_every_n_steps = int(args.log_every_n_steps)
     trainer_devices = int(args.devices)
@@ -242,10 +245,15 @@ if __name__ == '__main__':
     if train_count == 0:
         raise RuntimeError(f"No data_*.pt files found in {data_path_train}")
 
-    dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0)
+    dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0, sample_cache_size=0)
     dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
 
-    dset = RunningDataset(data_path_train, train_count, rand_g_prob=cfg['randomize_g_prob'])
+    dset = RunningDataset(
+        data_path_train,
+        train_count,
+        rand_g_prob=cfg['randomize_g_prob'],
+        sample_cache_size=sample_cache_size,
+    )
     dataloader = DataLoader(dset, batch_size=cfg['batch_size'], drop_last=True, shuffle=True, **loader_kwargs)
     ####################################################################################################################
     logger = None

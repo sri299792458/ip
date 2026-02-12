@@ -94,6 +94,7 @@ Core pseudo-data knobs:
 - `TRAIN_START_MIN_ITEMS` (default `512`)
 - `TRAIN_START_TIMEOUT_SEC` (default `7200`)
 - `GEN_CHUNK_TASKS` / `GEN_TASK_START` (continuous single-producer behavior)
+- `TRAIN_SAMPLE_CACHE_SIZE` (default `2048`; per-worker LRU sample cache for `data_*.pt`)
 - `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `3/3`)
 - `PCD_DTYPE` (default `float16`)
 - `VAL_NUM_TASKS` (default `100`)

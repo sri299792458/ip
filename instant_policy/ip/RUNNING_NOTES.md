@@ -56,6 +56,31 @@ Drop sharded generator logic from the unified training SLURM flow.
 - Fewer knobs and less failure surface.
 - Same ring-buffer behavior, but with one deterministic generator process.
 
+## RunningDataset LRU Cache (2026-02-12)
+
+### Decision
+Add a bounded per-worker sample cache to reduce repeated `torch.load` calls on `data_*.pt`.
+
+### Changed
+- `ip/utils/running_dataset.py`
+  - added optional `sample_cache_size` (LRU with mtime invalidation).
+  - cached entries are reused when file mtime is unchanged; cache updates automatically when files are replaced.
+  - mutation paths (`rand_g_prob`, random rotation) clone the sample to avoid modifying cached entries.
+- `ip/train.py`
+  - added `--sample_cache_size` and wired it into `RunningDataset` for training.
+- `apptainer/train_instant_policy.slurm`
+  - added `TRAIN_SAMPLE_CACHE_SIZE` (default `2048`) and passes `--sample_cache_size`.
+- `apptainer/README_instant_policy.md`
+  - documented `TRAIN_SAMPLE_CACHE_SIZE`.
+
+### Why
+- Step-format training does high-rate random access over many small files.
+- Cache reuse reduces filesystem open/load pressure while preserving continuous replacement semantics.
+
+### User-visible Effect
+- Expected throughput increase when data I/O is the bottleneck.
+- One new tuning knob: `TRAIN_SAMPLE_CACHE_SIZE`.
+
 ## Bootstrap Target + Fill Fix (2026-02-12)
 
 ### Decision
