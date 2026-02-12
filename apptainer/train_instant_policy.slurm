@@ -194,8 +194,14 @@ read_cpu_tot_idle() {
 MONITOR_PID=""
 TRAINER_PID=""
 TELEMETRY_LOG_CSV=""
+TRAINER_PID_FILE=""
+GEN_PIDS_FILE=""
 start_system_monitor() {
   TELEMETRY_LOG_CSV="$DATA_DIR/logs/ip_hw_${SLURM_JOB_ID:-manual}.csv"
+  TRAINER_PID_FILE="$DATA_DIR/logs/ip_trainer_${SLURM_JOB_ID:-manual}.pid"
+  GEN_PIDS_FILE="$DATA_DIR/logs/ip_gen_${SLURM_JOB_ID:-manual}.pids"
+  : > "$TRAINER_PID_FILE"
+  : > "$GEN_PIDS_FILE"
   cat > "$TELEMETRY_LOG_CSV" <<'EOF'
 ts_unix,elapsed_s,cpu_pct,mem_used_gb,mem_total_gb,gpu_util_pct,gpu_mem_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_power_w,gpu_temp_c,trainer_pid,trainer_rss_mb,trainer_cpu_pct,gen_alive,gen_rss_mb,gen_cpu_pct,train_items
 EOF
@@ -252,10 +258,14 @@ EOF
       trainer_pid=""
       trainer_rss_mb=""
       trainer_cpu_pct=""
-      if [ -n "${TRAINER_PID:-}" ] && kill -0 "$TRAINER_PID" 2>/dev/null; then
-        trainer_pid="$TRAINER_PID"
+      local tp=""
+      if [ -f "$TRAINER_PID_FILE" ]; then
+        tp="$(tr -d ' \n\r\t' < "$TRAINER_PID_FILE" 2>/dev/null || true)"
+      fi
+      if [ -n "$tp" ] && kill -0 "$tp" 2>/dev/null; then
+        trainer_pid="$tp"
         read -r trainer_rss_mb trainer_cpu_pct < <(
-          ps -p "$TRAINER_PID" -o rss=,%cpu= 2>/dev/null | awk 'NF {printf "%.2f %.2f\n", $1/1024.0, $2; exit}'
+          ps -p "$tp" -o rss=,%cpu= 2>/dev/null | awk 'NF {printf "%.2f %.2f\n", $1/1024.0, $2; exit}'
         )
       fi
 
@@ -263,15 +273,15 @@ EOF
       gen_alive=0
       gen_rss_mb=""
       gen_cpu_pct=""
-      if [ "${#GEN_PIDS[@]}" -gt 0 ]; then
-        local gen_pid_csv
-        gen_pid_csv="$(IFS=,; echo "${GEN_PIDS[*]}")"
-        if [ -n "$gen_pid_csv" ]; then
-          gen_alive="$(ps -p "$gen_pid_csv" -o pid= 2>/dev/null | wc -l | tr -d ' ')"
-          read -r gen_rss_mb gen_cpu_pct < <(
-            ps -p "$gen_pid_csv" -o rss=,%cpu= 2>/dev/null | awk 'NF {rss+=$1; cpu+=$2} END {if (NR>0) printf "%.2f %.2f\n", rss/1024.0, cpu}'
-          )
-        fi
+      local gen_pid_csv=""
+      if [ -f "$GEN_PIDS_FILE" ]; then
+        gen_pid_csv="$(tr '\n' ',' < "$GEN_PIDS_FILE" | sed 's/,$//' 2>/dev/null || true)"
+      fi
+      if [ -n "$gen_pid_csv" ]; then
+        gen_alive="$(ps -p "$gen_pid_csv" -o pid= 2>/dev/null | wc -l | tr -d ' ')"
+        read -r gen_rss_mb gen_cpu_pct < <(
+          ps -p "$gen_pid_csv" -o rss=,%cpu= 2>/dev/null | awk 'NF {rss+=$1; cpu+=$2} END {if (NR>0) printf "%.2f %.2f\n", rss/1024.0, cpu}'
+        )
       fi
 
       local train_items
@@ -296,6 +306,8 @@ stop_system_monitor() {
     kill "$MONITOR_PID" 2>/dev/null || true
     wait "$MONITOR_PID" 2>/dev/null || true
   fi
+  [ -n "${TRAINER_PID_FILE:-}" ] && rm -f "$TRAINER_PID_FILE" 2>/dev/null || true
+  [ -n "${GEN_PIDS_FILE:-}" ] && rm -f "$GEN_PIDS_FILE" 2>/dev/null || true
 }
 
 # Resolve ShapeNet path robustly.
@@ -438,6 +450,9 @@ done" >"$gen_log" 2>&1 &
 
   local gen_pid="$!"
   GEN_PIDS+=("$gen_pid")
+  if [ -n "${GEN_PIDS_FILE:-}" ]; then
+    printf "%s\n" "$gen_pid" >> "$GEN_PIDS_FILE"
+  fi
   echo "  pid=$gen_pid log=$gen_log seed=$gen_seed start_task=$GEN_TASK_START"
 }
 
@@ -539,10 +554,16 @@ python /workspace/instant_policy/ip/train.py \
   $ITER_OVERRIDE_ARGS \
   $EXTRA_TRAIN_ARGS" &
 TRAINER_PID="$!"
+if [ -n "${TRAINER_PID_FILE:-}" ]; then
+  printf "%s\n" "$TRAINER_PID" > "$TRAINER_PID_FILE"
+fi
 
 train_rc=0
 wait "$TRAINER_PID" || train_rc=$?
 TRAINER_PID=""
+if [ -n "${TRAINER_PID_FILE:-}" ]; then
+  : > "$TRAINER_PID_FILE"
+fi
 if [ "$train_rc" -ne 0 ]; then
   echo "ERROR: training process exited with code $train_rc"
   exit "$train_rc"

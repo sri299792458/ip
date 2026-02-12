@@ -2394,3 +2394,48 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### User-visible Effect
 - First submission with a new `RUN_NAME` starts cleanly.
 - Re-submissions with existing checkpoints still auto-resume.
+
+## Batch Size Override Fix (2026-02-11)
+
+### Decision
+- Ensure CLI `--batch_size` is always honored, including fresh train-from-scratch runs.
+
+### Changed
+- `ip/train.py`
+  - applies `cfg['batch_size'] = bs` unconditionally after config selection.
+  - adds explicit startup print:
+    - `[TRAIN_CONFIG] effective_batch_size=... train_items=... steps_per_epoch=...`
+
+### Why
+- In the scratch-training path, `cfg['batch_size']` remained at config default (`16`) even when SLURM passed `BATCH_SIZE=64`.
+- This made throughput experiments look inconsistent and hid the true effective batch.
+
+### User-visible Effect
+- `BATCH_SIZE` exported in SLURM now actually changes DataLoader batch size in all training modes.
+- Logs now show effective batch and derived steps/epoch, so mismatches are immediately visible.
+
+## Telemetry PID Visibility Fix (2026-02-11)
+
+### Decision
+- Make hardware telemetry process accounting reliable (trainer and generator PIDs) across the monitor subshell boundary.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - added PID files:
+    - `ip_trainer_<jobid>.pid`
+    - `ip_gen_<jobid>.pids`
+  - monitor loop now reads PID files each sample, instead of capturing parent-shell arrays/vars at subshell fork.
+  - generator startup appends worker PIDs to the generator PID file.
+  - trainer startup writes trainer PID to trainer PID file.
+  - cleanup removes PID files.
+
+### Why
+- In bash, the monitor runs in a subshell with snapshotted variables.
+- `TRAINER_PID` and `GEN_PIDS` updates made later in parent shell were invisible to the monitor, causing:
+  - `trainer_pid` blank
+  - `gen_alive` always 0
+  - misleading telemetry-based conclusions.
+
+### User-visible Effect
+- `ip_hw_<jobid>.csv` now reports trainer/generator process metrics correctly.
+- Throughput diagnosis using telemetry is now trustworthy.

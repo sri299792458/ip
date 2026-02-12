@@ -221,6 +221,9 @@ if __name__ == '__main__':
             cfg['record'] = record
             model = GraphDiffusion(cfg).to(cfg['device'])
 
+    # Always honor CLI batch size, including fresh train-from-scratch runs.
+    cfg['batch_size'] = bs
+
     if num_iters_override is not None:
         if int(num_iters_override) < 1:
             raise ValueError('--num_iters_override must be >= 1')
@@ -244,6 +247,10 @@ if __name__ == '__main__':
         raise RuntimeError(f"No data_*.pt files found in {data_path_val}")
     if train_count == 0:
         raise RuntimeError(f"No data_*.pt files found in {data_path_train}")
+    print(
+        f"[TRAIN_CONFIG] effective_batch_size={cfg['batch_size']} "
+        f"train_items={train_count} steps_per_epoch={train_count // cfg['batch_size']}"
+    )
 
     dset_val = RunningDataset(data_path_val, val_count, rand_g_prob=0, sample_cache_size=0)
     dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False)
