@@ -1,17 +1,17 @@
 #!/bin/bash
 # Unified MSI entrypoint:
-# 1) Ensure val set + minimal train bootstrap
-# 2) Start sharded continuous pseudo-demo generation in background
-# 3) Run training (resume-friendly across 24h jobs)
+# 1) Ensure val set
+# 2) Start continuous pseudo-demo generation in background
+# 3) Wait for minimal train data, then run training (resume-friendly across 24h jobs)
 #
 # Re-submit this same script for each 24h window.
-# Generator shard logs are written to:
-#   /scratch.global/$USER/ips/logs/ip_gen_${SLURM_JOB_ID}_shard*.log
+# Generator log is written to:
+#   /scratch.global/$USER/ips/logs/ip_gen_${SLURM_JOB_ID}.log
 #
-# Defaults are chosen for one clean pipeline (no offline full fill):
-# - Bootstrap ring to minimal target item count (default: MIN_BOOTSTRAP_TASKS=512)
-# - Continuous sharded generation (single shard by default for 1-GPU runs)
+# Defaults are chosen for one clean pipeline (no explicit bootstrap):
+# - Continuous single generator process (1-GPU stable default)
 # - Ring buffer overwrite behavior via --buffer_size
+# - Train starts after a minimal number of files exist
 #SBATCH -A kdesingh
 #SBATCH -p msigpu
 #SBATCH --gres=gpu:1
@@ -89,27 +89,20 @@ TRAIN_STRATEGY=${TRAIN_STRATEGY:-auto}
 
 # Ring/generation settings.
 TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
-# Backward-compatible alias:
-# - Old env used MIN_BOOTSTRAP_TASKS.
-# - New name reflects count of files in active DATA_FORMAT.
-MIN_BOOTSTRAP_TASKS=${MIN_BOOTSTRAP_TASKS:-512}
-MIN_BOOTSTRAP_ITEMS=${MIN_BOOTSTRAP_ITEMS:-$MIN_BOOTSTRAP_TASKS}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
 PCD_DTYPE=${PCD_DTYPE:-float16}
+TRAIN_START_MIN_ITEMS=${TRAIN_START_MIN_ITEMS:-512}
+TRAIN_START_TIMEOUT_SEC=${TRAIN_START_TIMEOUT_SEC:-7200}
 
 # Profiling/telemetry settings (for 1h decision runs).
 TELEMETRY_INTERVAL_SEC=${TELEMETRY_INTERVAL_SEC:-30}
 TELEMETRY_TASK_COUNT_EVERY=${TELEMETRY_TASK_COUNT_EVERY:-10}
 
-# Parallel shard workers (continuous producer).
-ENABLE_PARALLEL_GENERATORS=${ENABLE_PARALLEL_GENERATORS:-1}
-GEN_NUM_SHARDS=${GEN_NUM_SHARDS:-1}
+# Continuous producer settings.
 GEN_CHUNK_TASKS=${GEN_CHUNK_TASKS:-256}
-GEN_TASK_START_BASE=${GEN_TASK_START_BASE:-1000000}
-GEN_TASK_START_STRIDE=${GEN_TASK_START_STRIDE:-100000000}
-GEN_SEED_STRIDE=${GEN_SEED_STRIDE:-1000003}
+GEN_TASK_START=${GEN_TASK_START:-1000000}
 GEN_FORCE_SOFTWARE_RENDERING=${GEN_FORCE_SOFTWARE_RENDERING:-0}
 DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
 VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
@@ -346,8 +339,8 @@ echo "shapenet_path=$SHAPENET_PATH (host: $HOST_SHAPENET)"
 echo "auto_resume=$AUTO_RESUME use_wandb=$USE_WANDB"
 echo "compile_models=$COMPILE_MODELS devices=$TRAIN_DEVICES strategy=$TRAIN_STRATEGY"
 echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interval=$TRAIN_VAL_CHECK_INTERVAL"
-echo "ring_buffer_size=$TRAIN_BUFFER_SIZE min_bootstrap_items=$MIN_BOOTSTRAP_ITEMS"
-echo "parallel_generators=$ENABLE_PARALLEL_GENERATORS num_shards=$GEN_NUM_SHARDS chunk_tasks=$GEN_CHUNK_TASKS"
+echo "ring_buffer_size=$TRAIN_BUFFER_SIZE train_start_min_items=$TRAIN_START_MIN_ITEMS timeout_s=$TRAIN_START_TIMEOUT_SEC"
+echo "generator=single chunk_tasks=$GEN_CHUNK_TASKS"
 echo "data_file_glob=$DATA_FILE_GLOB storage_format=$GEN_STORAGE_FORMAT gen_force_software=$GEN_FORCE_SOFTWARE_RENDERING"
 if [ "$DEBUG_VAL_DIAGNOSTICS" = "1" ]; then
   echo "DEBUG_VAL_DIAGNOSTICS=1"
@@ -392,44 +385,6 @@ python -m ip.scripts.generate_pseudo_demos \
 fi
 debug_val_diagnostics "after_val_build"
 
-# Minimal bootstrap only: enough to avoid empty train dataset.
-TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
-if [ "$MIN_BOOTSTRAP_ITEMS" -gt "$TRAIN_BUFFER_SIZE" ]; then
-  echo "WARNING: MIN_BOOTSTRAP_ITEMS=$MIN_BOOTSTRAP_ITEMS exceeds TRAIN_BUFFER_SIZE=$TRAIN_BUFFER_SIZE; clamping."
-  MIN_BOOTSTRAP_ITEMS="$TRAIN_BUFFER_SIZE"
-fi
-if [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_ITEMS" ]; then
-  echo "Bootstrapping train ring to target=$MIN_BOOTSTRAP_ITEMS from current=$TRAIN_COUNT"
-  BOOTSTRAP_ATTEMPT=0
-  while [ "$TRAIN_COUNT" -lt "$MIN_BOOTSTRAP_ITEMS" ]; do
-    BOOTSTRAP_ATTEMPT=$((BOOTSTRAP_ATTEMPT + 1))
-    if [ "$BOOTSTRAP_ATTEMPT" -gt 8 ]; then
-      echo "ERROR: bootstrap did not reach target after $BOOTSTRAP_ATTEMPT attempts (current=$TRAIN_COUNT target=$MIN_BOOTSTRAP_ITEMS)."
-      exit 1
-    fi
-    "$RUNNER" "set -euo pipefail
-export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
-python -m ip.scripts.generate_pseudo_demos \
-  --shapenet_path \"$SHAPENET_PATH\" \
-  --shapenet_index_path \"$INDEX_PATH\" \
-  --save_dir \"$TRAIN_DATA_DIR\" \
-  --num_tasks $TRAIN_BUFFER_SIZE \
-  --task_start $TRAIN_COUNT \
-  --append \
-  --seed $TRAIN_GEN_SEED \
-  --storage_format $GEN_STORAGE_FORMAT \
-  --pcd_storage_dtype $PCD_DTYPE \
-  --buffer_size $MIN_BOOTSTRAP_ITEMS \
-  --fill_buffer \
-  --num_shards 1 \
-  --shard_id 0 \
-  --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
-  --gripper_mesh_path \"$MESH_PATH\""
-    TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
-    echo "  bootstrap attempt=$BOOTSTRAP_ATTEMPT train_items=$TRAIN_COUNT target=$MIN_BOOTSTRAP_ITEMS"
-  done
-fi
-
 VAL_COUNT="$(count_data_files "$HOST_VAL_DIR")"
 TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
 echo "val_items=$VAL_COUNT train_items=$TRAIN_COUNT"
@@ -438,45 +393,27 @@ if [ "$VAL_COUNT" -eq 0 ]; then
   echo "ERROR: validation set is empty at $HOST_VAL_DIR"
   exit 1
 fi
-if [ "$TRAIN_COUNT" -eq 0 ]; then
-  echo "ERROR: training ring buffer is empty at $HOST_TRAIN_DIR"
-  exit 1
+if [ "$TRAIN_START_MIN_ITEMS" -lt 1 ]; then
+  TRAIN_START_MIN_ITEMS=1
+fi
+if [ "$TRAIN_START_MIN_ITEMS" -gt "$TRAIN_BUFFER_SIZE" ]; then
+  echo "WARNING: TRAIN_START_MIN_ITEMS=$TRAIN_START_MIN_ITEMS exceeds TRAIN_BUFFER_SIZE=$TRAIN_BUFFER_SIZE; clamping."
+  TRAIN_START_MIN_ITEMS="$TRAIN_BUFFER_SIZE"
 fi
 
-ACTIVE_BUFFER_SIZE="$TRAIN_COUNT"
-REQUESTED_GEN_WORKERS="$GEN_NUM_SHARDS"
-GEN_WORKERS=0
-if [ "$REQUESTED_GEN_WORKERS" -gt 0 ]; then
-  GEN_WORKERS="$REQUESTED_GEN_WORKERS"
-  if [ "$GEN_WORKERS" -gt "$ACTIVE_BUFFER_SIZE" ]; then
-    GEN_WORKERS="$ACTIVE_BUFFER_SIZE"
-  fi
-fi
-echo "active_ring_size=$ACTIVE_BUFFER_SIZE requested_gen_workers=$REQUESTED_GEN_WORKERS gen_workers=$GEN_WORKERS display_base=$DISPLAY_BASE"
+ACTIVE_BUFFER_SIZE="$TRAIN_BUFFER_SIZE"
+echo "active_ring_size=$ACTIVE_BUFFER_SIZE generator_workers=1 display_base=$DISPLAY_BASE"
 
 GEN_PIDS=()
 start_generators() {
-  if [ "$ENABLE_PARALLEL_GENERATORS" != "1" ]; then
-    echo "Parallel generators disabled."
-    return
-  fi
-  if [ "$GEN_WORKERS" -le 0 ]; then
-    echo "Parallel generators disabled because gen_workers=$GEN_WORKERS"
-    return
-  fi
-
-  echo "Starting $GEN_WORKERS sharded generator workers..."
-  local shard
-  for shard in $(seq 0 $((GEN_WORKERS - 1))); do
-    local shard_seed=$((TRAIN_GEN_SEED + shard * GEN_SEED_STRIDE))
-    local shard_task_start=$((GEN_TASK_START_BASE + shard * GEN_TASK_START_STRIDE))
-    local shard_log="$DATA_DIR/logs/ip_gen_${SLURM_JOB_ID:-manual}_shard${shard}.log"
-
-    SHARD_DISPLAY=$((DISPLAY_BASE + 1 + shard))
-    SHARD_VNC_PORT=$((VNC_BASE + 1 + shard))
-    RLBENCH_DISPLAY=$SHARD_DISPLAY RLBENCH_VNC_PORT=$SHARD_VNC_PORT FORCE_SOFTWARE_RENDERING=$GEN_FORCE_SOFTWARE_RENDERING "$RUNNER" "set -euo pipefail
+  echo "Starting single generator worker..."
+  local gen_log="$DATA_DIR/logs/ip_gen_${SLURM_JOB_ID:-manual}.log"
+  local gen_display=$((DISPLAY_BASE + 1))
+  local gen_vnc_port=$((VNC_BASE + 1))
+  local gen_seed="$TRAIN_GEN_SEED"
+  RLBENCH_DISPLAY=$gen_display RLBENCH_VNC_PORT=$gen_vnc_port FORCE_SOFTWARE_RENDERING=$GEN_FORCE_SOFTWARE_RENDERING "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
-TASK_START=$shard_task_start
+TASK_START=$GEN_TASK_START
 while true; do
   T0=\$(date +%s)
   python -m ip.scripts.generate_pseudo_demos \
@@ -486,23 +423,20 @@ while true; do
     --num_tasks $GEN_CHUNK_TASKS \
     --task_start \$TASK_START \
     --append \
-    --seed $shard_seed \
+    --seed $gen_seed \
     --storage_format $GEN_STORAGE_FORMAT \
     --pcd_storage_dtype $PCD_DTYPE \
     --buffer_size $ACTIVE_BUFFER_SIZE \
-    --num_shards $GEN_WORKERS \
-    --shard_id $shard \
     --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
     --gripper_mesh_path \"$MESH_PATH\"
   TASK_START=\$((TASK_START + $GEN_CHUNK_TASKS))
   T1=\$(date +%s)
-  echo \"[shard $shard] ts=\$T1 chunk=$GEN_CHUNK_TASKS dt=\$((T1 - T0))s next_task_start=\$TASK_START\"
-done" >"$shard_log" 2>&1 &
+  echo \"[generator] ts=\$T1 chunk=$GEN_CHUNK_TASKS dt=\$((T1 - T0))s next_task_start=\$TASK_START\"
+done" >"$gen_log" 2>&1 &
 
-    local gen_pid="$!"
-    GEN_PIDS+=("$gen_pid")
-    echo "  shard=$shard pid=$gen_pid log=$shard_log seed=$shard_seed start_task=$shard_task_start"
-  done
+  local gen_pid="$!"
+  GEN_PIDS+=("$gen_pid")
+  echo "  pid=$gen_pid log=$gen_log seed=$gen_seed start_task=$GEN_TASK_START"
 }
 
 stop_generators() {
@@ -521,6 +455,31 @@ trap cleanup_all EXIT INT TERM
 
 start_system_monitor
 start_generators
+
+wait_for_train_data() {
+  local target="$1"
+  local timeout="$2"
+  local interval=20
+  local waited=0
+  local current=0
+
+  while true; do
+    current="$(count_data_files "$HOST_TRAIN_DIR")"
+    if [ "$current" -ge "$target" ]; then
+      echo "Train data ready: train_items=$current target=$target"
+      break
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+      echo "ERROR: timed out waiting for train data (have=$current target=$target timeout=${timeout}s)."
+      exit 1
+    fi
+    echo "Waiting for train data: have=$current target=$target waited=${waited}s"
+    sleep "$interval"
+    waited=$((waited + interval))
+  done
+}
+
+wait_for_train_data "$TRAIN_START_MIN_ITEMS" "$TRAIN_START_TIMEOUT_SEC"
 
 ITER_OVERRIDE_ARGS=""
 if [ -n "$NUM_ITERS_OVERRIDE" ]; then

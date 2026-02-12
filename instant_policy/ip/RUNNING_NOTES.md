@@ -11,6 +11,51 @@ Keep this file as the canonical deployment decision log.
 - Any behavior change in `ip/deployment` gets a short note here in the same work session.
 - Each note must include: what changed, why, and the user-visible effect.
 
+## Bootstrap-Free Train Start (2026-02-12)
+
+### Decision
+Remove explicit bootstrap phase and use a single continuous generator path.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - removed bootstrap loop (`MIN_BOOTSTRAP_TASKS` / `MIN_BOOTSTRAP_ITEMS` flow).
+  - ring generator now starts first and always targets full ring size (`TRAIN_BUFFER_SIZE`).
+  - added train start gate:
+    - `TRAIN_START_MIN_ITEMS` (default `512`)
+    - `TRAIN_START_TIMEOUT_SEC` (default `7200`)
+- trainer starts only after `data_*.pt` count reaches `TRAIN_START_MIN_ITEMS`.
+- `apptainer/README_instant_policy.md`
+  - updated to document bootstrap-free flow and new knobs.
+
+### Why
+- Bootstrap logic added failure modes and confusion.
+- Continuous generator + start gate is simpler and deterministic.
+
+### User-visible Effect
+- One path only: start generator, wait for enough files, train.
+- No separate bootstrap retry behavior.
+
+## Single-Generator Simplification (2026-02-12)
+
+### Decision
+Drop sharded generator logic from the unified training SLURM flow.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - removed shard-related knobs and math (`GEN_NUM_SHARDS`, shard start/seed strides, shard args).
+  - continuous generation now runs as one background worker only.
+  - simplified logging (`ip_gen_<jobid>.log`, `generator_workers=1`).
+- `apptainer/README_instant_policy.md`
+  - removed shard knob mention and documented single-generator controls.
+
+### Why
+- For this single-GPU setup, shard complexity caused confusion without practical benefit.
+- One producer is simpler to reason about and more stable operationally.
+
+### User-visible Effect
+- Fewer knobs and less failure surface.
+- Same ring-buffer behavior, but with one deterministic generator process.
+
 ## Bootstrap Target + Fill Fix (2026-02-12)
 
 ### Decision

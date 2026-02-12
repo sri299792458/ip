@@ -740,7 +740,11 @@ class PseudoDemoGenerator:
                 if shard_end is not None:
                     shard_size = shard_end - shard_start
                     if live_len >= shard_size:
-                        raise RuntimeError("Sample length exceeds shard size. Increase buffer_size.")
+                        raise RuntimeError(
+                            "Sample length exceeds ring shard capacity: "
+                            f"live_len={live_len} >= shard_size={shard_size}. "
+                            "Increase buffer_size / TRAIN_BUFFER_SIZE."
+                        )
                     if offset + live_len > shard_end:
                         if fill_buffer:
                             # For bootstrap fill, place the sample flush to shard end
