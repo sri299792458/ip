@@ -116,6 +116,8 @@ cleanup_stale_processes
 CMD="${@:-bash}"
 
 # Run container (isolate from host env/home for stability)
+# With --cleanenv, only APPTAINERENV_* vars are guaranteed to propagate.
+APPTAINERENV_FORCE_SOFTWARE_RENDERING="${FORCE_SOFTWARE_RENDERING:-0}" \
 apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
     $BIND_LIBS \
     $NETRC_BIND \
@@ -248,6 +250,9 @@ apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         if [ \"\${FORCE_SOFTWARE_RENDERING:-0}\" = \"1\" ]; then
             export MESA_GL_VERSION_OVERRIDE=3.3
             export LIBGL_ALWAYS_SOFTWARE=1
+            echo 'Software GL rendering: enabled (FORCE_SOFTWARE_RENDERING=1)'
+        else
+            echo 'Software GL rendering: disabled (FORCE_SOFTWARE_RENDERING=0)'
         fi
 
         # instant_policy from host

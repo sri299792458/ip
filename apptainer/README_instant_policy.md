@@ -95,10 +95,99 @@ Core pseudo-data knobs:
 - `TRAIN_START_TIMEOUT_SEC` (default `7200`)
 - `GEN_CHUNK_TASKS` / `GEN_TASK_START` (continuous single-producer behavior)
 - `TRAIN_SAMPLE_CACHE_SIZE` (default `2048`; per-worker LRU sample cache for `data_*.pt`)
-- `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `3/3`)
+- `DEMOS_PER_TASK_MIN` / `DEMOS_PER_TASK_MAX` (default `2/4`)
 - `PCD_DTYPE` (default `float16`)
 - `VAL_NUM_TASKS` (default `100`)
 - `VAL_TASK_START` (default `200000000`)
+
+## Data Units (What Is a File / Sample / Task / Batch)
+
+This section is the ground-truth contract for `steps` mode (`data_*.pt`), which is the only
+data mode used by `train_instant_policy.slurm`.
+
+### 1) Raw generated demo trajectory (before step packing)
+
+Each generated demo trajectory has:
+- `pcds[t]`: object-only point cloud in world frame (downsampled to `2048` points)
+- `T_w_es[t]`: end-effector pose in world frame
+- `grips[t]`: binary gripper state (`1=open`, `0=closed`)
+
+### 2) What one `data_<k>.pt` file stores
+
+A single `data_*.pt` is one training step sample (one live timestep + action horizon), with:
+- context demo tensors (same for all timesteps from the same pseudo sample):
+  - `pos_demos`: concatenated context waypoint point clouds
+  - `graps_demos`: context gripper states at waypoints
+  - `demo_T_w_es`: context waypoint poses
+  - `batch_demos`: point-to-waypoint/demo index map
+- live-step tensors (change per file):
+  - `pos_obs`: current live observation point cloud in end-effector frame
+  - `current_grip`: current gripper state
+  - `T_w_e`: current end-effector pose
+  - `actions`: next `pred_horizon` relative SE(3) actions (default horizon `8`)
+  - `actions_grip`: next `pred_horizon` gripper states
+
+Important:
+- In `steps` mode, context is duplicated across many files (all live timesteps of the same sample),
+  which increases file count and storage.
+
+### 3) What is "one task" in generation
+
+In pseudo generation:
+- one pseudo-task samples one scene + one waypoint spec
+- then generates `D` demos (`D` in `[DEMOS_PER_TASK_MIN, DEMOS_PER_TASK_MAX]`, default `2..4`)
+- each demo can become the live trajectory once, with others as context
+- each live trajectory contributes one `data_*.pt` per live timestep
+
+So files per pseudo-task are:
+- `files_per_task = sum(live_timesteps_of_each_live_demo)`
+- not equal to 1
+
+This is why `VAL_NUM_TASKS=100` can produce many more than 100 files.
+Example from your run:
+- `16507` files in `val` for `100` tasks means about `165` step-samples per task on average.
+
+- per-demo live timestep count is set by trajectory geometry plus interpolation density
+  (`trans_spacing` / `rot_spacing_deg`), then summed across demos in the task.
+- with current defaults, interpolation targets roughly `1 cm` translation spacing and `3 deg` rotation spacing,
+  so longer/curvier motions produce more step files.
+
+### 4) What is one training sample
+
+One training sample is exactly one file:
+- `data_<idx>.pt`
+- loaded by `RunningDataset.__getitem__`
+
+### 5) What batch size means here
+
+`BATCH_SIZE` in training means:
+- number of `data_*.pt` files consumed per optimizer step
+- not number of pseudo-tasks
+- not number of trajectories
+
+With `drop_last=True`, steps per epoch are:
+- `steps_per_epoch = floor(train_items / batch_size)`
+
+Example with ring size `TRAIN_BUFFER_SIZE=8192`:
+- `batch_size=16` -> `512` steps/epoch
+- `batch_size=64` -> `128` steps/epoch
+
+### 6) Why per-file size can look large
+
+`data_*.pt` includes both:
+- live-step tensors
+- duplicated context tensors
+
+So sizes like `~846K` per file and multi-GB val/train dirs are expected in `steps` mode.
+This is a representation choice for training simplicity and online ring replacement behavior.
+
+### 7) What happens near the end of a trajectory (`pred_horizon=8`)
+
+For a live index `t`, targets are built for `t+1 ... t+8`.
+- if `t+j` exists: target pose is relative transform `inv(T_w_e[t]) @ T_w_e[t+j]`, target grip is `grips[t+j]`
+- if `t+j` is out of range: target pose is identity (`I_4`), target grip is the final grip (`grips[-1]`)
+
+So if a very late timestep is selected, part (or all) of the 8-step target window is padding.
 
 ## Key Runtime Behavior (Why It Works)
 

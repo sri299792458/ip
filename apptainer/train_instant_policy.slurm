@@ -91,8 +91,8 @@ TRAIN_STRATEGY=${TRAIN_STRATEGY:-auto}
 # Ring/generation settings.
 TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
 TRAIN_GEN_SEED=${TRAIN_GEN_SEED:-1337}
-DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-3}
-DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-3}
+DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-2}
+DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-4}
 PCD_DTYPE=${PCD_DTYPE:-float16}
 TRAIN_START_MIN_ITEMS=${TRAIN_START_MIN_ITEMS:-512}
 TRAIN_START_TIMEOUT_SEC=${TRAIN_START_TIMEOUT_SEC:-7200}
@@ -427,6 +427,31 @@ start_generators() {
   local gen_seed="$TRAIN_GEN_SEED"
   RLBENCH_DISPLAY=$gen_display RLBENCH_VNC_PORT=$gen_vnc_port FORCE_SOFTWARE_RENDERING=$GEN_FORCE_SOFTWARE_RENDERING "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
+# One-shot render backend probe so logs show the actual GL stack in use.
+python - <<'PY'
+import os
+try:
+    import pyrender
+    from OpenGL import GL
+    r = pyrender.OffscreenRenderer(64, 64)
+    platform = type(getattr(r, '_platform', None)).__name__
+    def dec(x):
+        if isinstance(x, (bytes, bytearray)):
+            return x.decode('utf-8', errors='ignore')
+        return str(x)
+    vendor = dec(GL.glGetString(GL.GL_VENDOR))
+    renderer = dec(GL.glGetString(GL.GL_RENDERER))
+    version = dec(GL.glGetString(GL.GL_VERSION))
+    print(f\"[render_probe] FORCE_SOFTWARE_RENDERING={os.environ.get('FORCE_SOFTWARE_RENDERING', '')}\")
+    print(f\"[render_probe] PYOPENGL_PLATFORM={os.environ.get('PYOPENGL_PLATFORM', '')}\")
+    print(f\"[render_probe] platform={platform}\")
+    print(f\"[render_probe] vendor={vendor}\")
+    print(f\"[render_probe] renderer={renderer}\")
+    print(f\"[render_probe] version={version}\")
+    r.delete()
+except Exception as exc:
+    print(f\"[render_probe] ERROR: {exc}\")
+PY
 TASK_START=$GEN_TASK_START
 while true; do
   T0=\$(date +%s)

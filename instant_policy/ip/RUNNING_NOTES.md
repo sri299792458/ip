@@ -2439,3 +2439,46 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 ### User-visible Effect
 - `ip_hw_<jobid>.csv` now reports trainer/generator process metrics correctly.
 - Throughput diagnosis using telemetry is now trustworthy.
+
+## Steps-Mode Data Semantics Note (2026-02-11)
+
+### Decision
+- Document `steps`-mode unit semantics directly in the apptainer README:
+  - what a `data_*.pt` contains,
+  - what one pseudo-task generates,
+  - what one training sample means,
+  - what `BATCH_SIZE` means in this pipeline.
+
+### Changed
+- `apptainer/README_instant_policy.md`
+  - added section: `Data Units (What Is a File / Sample / Task / Batch)`.
+  - includes explicit formulas and examples:
+    - files-per-task behavior in `steps` mode,
+    - `steps_per_epoch = floor(train_items / batch_size)`,
+    - ring-size example (`8192` with batch `16` vs `64`).
+
+### Why
+- Ambiguity between task-level and step-level units caused repeated confusion in throughput/runtime reasoning.
+- `steps` mode intentionally duplicates context per live timestep file; this affects disk usage and epoch math.
+
+### User-visible Effect
+- One place now clearly explains how to interpret `data_*.pt` counts, per-file size, and batch-size effects.
+
+## Default Demos Per Task Range Updated (2026-02-13)
+
+### Decision
+- Change pseudo-task demo-count defaults from fixed `3` to range `2..4`.
+
+### Changed
+- `apptainer/train_instant_policy.slurm`
+  - `DEMOS_PER_TASK_MIN` default: `3 -> 2`
+  - `DEMOS_PER_TASK_MAX` default: `3 -> 4`
+- `apptainer/README_instant_policy.md`
+  - updated default knobs text to `2/4`
+  - updated pseudo-task description default from `3` to `2..4`
+
+### Why
+- Align defaults with current training plan: modest per-task diversity without forcing a fixed demo count.
+
+### User-visible Effect
+- Runs that do not override `DEMOS_PER_TASK_MIN/MAX` now sample between 2 and 4 demos per pseudo-task.
