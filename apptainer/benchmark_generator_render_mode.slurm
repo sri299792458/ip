@@ -119,7 +119,7 @@ python -m ip.scripts.build_robotiq_mesh --out \"$MESH_PATH\" --source collision 
 fi
 
 SUMMARY_CSV="$HOST_BENCH_ROOT/summary.csv"
-echo "mode,force_software,elapsed_s,num_tasks,num_items,tasks_per_s,items_per_s,render_platform,gl_vendor,gl_renderer" > "$SUMMARY_CSV"
+echo "mode,force_software,status,elapsed_s,num_tasks,num_items,tasks_per_s,items_per_s,render_platform,gl_vendor,gl_renderer,log_path" > "$SUMMARY_CSV"
 
 run_case() {
   local mode="$1"          # gpu|sw
@@ -137,6 +137,8 @@ run_case() {
   local t0 t1 dt items tps ips
   t0="$(date +%s)"
 
+  echo "[$mode] starting (FORCE_SOFTWARE_RENDERING=$force_sw)..."
+  set +e
   FORCE_SOFTWARE_RENDERING="$force_sw" \
   RLBENCH_DISPLAY="$disp" \
   RLBENCH_VNC_PORT="$vnc" \
@@ -175,6 +177,8 @@ python -m ip.scripts.generate_pseudo_demos \
   --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
   --gripper_mesh_path \"$MESH_PATH\" \
   --attach_capture_min_points 3" > "$case_log" 2>&1
+  local rc=$?
+  set -e
 
   t1="$(date +%s)"
   dt=$((t1 - t0))
@@ -182,14 +186,19 @@ python -m ip.scripts.generate_pseudo_demos \
   tps="$(awk -v t="$BENCH_TASKS" -v d="$dt" 'BEGIN {if (d>0) printf "%.6f", t/d; else print "0"}')"
   ips="$(awk -v i="$items" -v d="$dt" 'BEGIN {if (d>0) printf "%.6f", i/d; else print "0"}')"
 
-  local plat vendor renderer
+  local plat vendor renderer status
   plat="$(grep -m1 '^\[render_probe\] platform=' "$case_log" | sed 's/.*platform=//')"
   vendor="$(grep -m1 '^\[render_probe\] vendor=' "$case_log" | sed 's/.*vendor=//')"
   renderer="$(grep -m1 '^\[render_probe\] renderer=' "$case_log" | sed 's/.*renderer=//')"
+  if [ "$rc" -eq 0 ]; then
+    status="ok"
+  else
+    status="failed:$rc"
+  fi
 
-  echo "$mode,$force_sw,$dt,$BENCH_TASKS,$items,$tps,$ips,\"$plat\",\"$vendor\",\"$renderer\"" >> "$SUMMARY_CSV"
+  echo "$mode,$force_sw,$status,$dt,$BENCH_TASKS,$items,$tps,$ips,\"$plat\",\"$vendor\",\"$renderer\",\"$case_log\"" >> "$SUMMARY_CSV"
 
-  echo "[$mode] elapsed_s=$dt num_tasks=$BENCH_TASKS num_items=$items tasks_per_s=$tps items_per_s=$ips"
+  echo "[$mode] status=$status elapsed_s=$dt num_tasks=$BENCH_TASKS num_items=$items tasks_per_s=$tps items_per_s=$ips"
   echo "[$mode] render_platform=$plat"
   echo "[$mode] gl_vendor=$vendor"
   echo "[$mode] gl_renderer=$renderer"
@@ -217,8 +226,8 @@ cat "$SUMMARY_CSV"
 # Print slowdown/speedup ratio for quick read.
 awk -F',' '
 NR==1 {next}
-$1=="gpu" {gpu_tps=$6; gpu_ips=$7}
-$1=="sw"  {sw_tps=$6;  sw_ips=$7}
+$1=="gpu" && $3=="ok" {gpu_tps=$7; gpu_ips=$8}
+$1=="sw"  && $3=="ok" {sw_tps=$7;  sw_ips=$8}
 END{
   if (gpu_tps>0 && sw_tps>0) {
     printf "tasks_per_s_ratio(sw/gpu)=%.4f\n", sw_tps/gpu_tps
