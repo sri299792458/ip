@@ -214,7 +214,6 @@ W&B auth note:
 - `RLBENCH_VNC_PORT` (default: `5900`)
 - `RLBENCH_ENABLE_VNC` (default: `1`; set `0` for Xvfb-only mode)
 - `COPPELIASIM_USE_COPY=1` to use a writable copy at `/workspace/data/.coppeliasim`
-- `FORCE_SOFTWARE_RENDERING=1` to force Mesa software rendering (use only if needed)
 
 ## Troubleshooting
 

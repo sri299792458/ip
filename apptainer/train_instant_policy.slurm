@@ -104,7 +104,6 @@ TELEMETRY_TASK_COUNT_EVERY=${TELEMETRY_TASK_COUNT_EVERY:-10}
 # Continuous producer settings.
 GEN_CHUNK_TASKS=${GEN_CHUNK_TASKS:-256}
 GEN_TASK_START=${GEN_TASK_START:-1000000}
-GEN_FORCE_SOFTWARE_RENDERING=${GEN_FORCE_SOFTWARE_RENDERING:-0}
 DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
 VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
 
@@ -355,7 +354,7 @@ echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interva
 echo "sample_cache_size=$TRAIN_SAMPLE_CACHE_SIZE"
 echo "ring_buffer_size=$TRAIN_BUFFER_SIZE train_start_min_items=$TRAIN_START_MIN_ITEMS timeout_s=$TRAIN_START_TIMEOUT_SEC"
 echo "generator=single chunk_tasks=$GEN_CHUNK_TASKS"
-echo "data_file_glob=$DATA_FILE_GLOB storage_format=$GEN_STORAGE_FORMAT gen_force_software=$GEN_FORCE_SOFTWARE_RENDERING"
+echo "data_file_glob=$DATA_FILE_GLOB storage_format=$GEN_STORAGE_FORMAT"
 if [ "$DEBUG_VAL_DIAGNOSTICS" = "1" ]; then
   echo "DEBUG_VAL_DIAGNOSTICS=1"
 fi
@@ -425,7 +424,7 @@ start_generators() {
   local gen_display=$((DISPLAY_BASE + 1))
   local gen_vnc_port=$((VNC_BASE + 1))
   local gen_seed="$TRAIN_GEN_SEED"
-  RLBENCH_DISPLAY=$gen_display RLBENCH_VNC_PORT=$gen_vnc_port FORCE_SOFTWARE_RENDERING=$GEN_FORCE_SOFTWARE_RENDERING "$RUNNER" "set -euo pipefail
+  RLBENCH_DISPLAY=$gen_display RLBENCH_VNC_PORT=$gen_vnc_port "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
 # One-shot render backend probe so logs show the actual GL stack in use.
 python - <<'PY'
@@ -442,7 +441,6 @@ try:
     vendor = dec(GL.glGetString(GL.GL_VENDOR))
     renderer = dec(GL.glGetString(GL.GL_RENDERER))
     version = dec(GL.glGetString(GL.GL_VERSION))
-    print(f\"[render_probe] FORCE_SOFTWARE_RENDERING={os.environ.get('FORCE_SOFTWARE_RENDERING', '')}\")
     print(f\"[render_probe] PYOPENGL_PLATFORM={os.environ.get('PYOPENGL_PLATFORM', '')}\")
     print(f\"[render_probe] platform={platform}\")
     print(f\"[render_probe] vendor={vendor}\")

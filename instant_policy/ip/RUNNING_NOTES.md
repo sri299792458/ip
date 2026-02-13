@@ -2658,3 +2658,20 @@ root: Data = Data(pos_demos=[40960, 3], graps_demos=[1, 2, 10, 1], batch_demos=[
   - required update rate is `2.5e6 / (5*24*3600) ~= 5.79 it/s`.
 - This check should be done in `it/s` (updates/sec), not only samples/sec.
 - Increasing batch size changes samples/sec, but paper-matching wall-time for fixed step budget still depends on sustained `it/s`.
+
+## Software Rendering Cleanup (2026-02-13)
+
+### Decision
+- Remove software-rendering toggles/bench code from active pipeline.
+- Treat generator path as GPU EGL only for current container/runtime.
+
+### Changed
+- Removed `GEN_FORCE_SOFTWARE_RENDERING` from `apptainer/train_instant_policy.slurm`.
+- Removed `FORCE_SOFTWARE_RENDERING` propagation and toggle block from `apptainer/run_instant_policy_vnc.sh`.
+- Deleted `apptainer/benchmark_generator_render_mode.slurm`.
+- Deleted `instant_policy/ip/scripts/probe_render_backend.py`.
+- Removed software-rendering env var note from `apptainer/README_instant_policy.md`.
+
+### Why
+- OSMesa backend is unavailable in the current container (missing `libOSMesa`), so the software path is not usable.
+- Keeping dead toggles caused repeated confusion and wasted runs.
