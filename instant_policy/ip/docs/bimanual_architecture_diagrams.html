@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bimanual Instant Policy Diagrams</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #4b5563;
+      --accent: #0f766e;
+      --border: #d1d5db;
+    }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #eef2ff 0%, var(--bg) 35%);
+    }
+    .wrap {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      line-height: 1.15;
+    }
+    p.lead { margin: 0 0 18px; color: var(--muted); font-size: 16px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px 14px 8px;
+      margin: 14px 0 20px;
+      box-shadow: 0 10px 28px rgba(17, 24, 39, 0.08);
+    }
+    .card h2 { margin: 4px 8px 10px; font-size: 20px; color: var(--accent); }
+    .mermaid { overflow: auto; padding: 8px; }
+    .notes {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 16px;
+      margin-top: 10px;
+    }
+    .notes h3 { margin: 0 0 8px; font-size: 18px; }
+    .notes ul { margin: 0; padding-left: 18px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Bimanual Instant Policy Diagrams</h1>
+    <p class="lead">Paper-style architecture and invariance views for lab update slides.</p>
+
+    <section class="card">
+      <h2>1) Model Architecture (Bimanual, Relative/Local)</h2>
+      <div class="mermaid">
+flowchart LR
+  subgraph I[World Inputs]
+    PW[Scene points world B N 3]
+    TLW[TwL current B 4 4]
+    TRW[TwR current B 4 4]
+    GL[Grip left current]
+    GR[Grip right current]
+  end
+
+  A[World to relative adapter build_obs_targets]
+
+  subgraph O[Relative Observation]
+    PL[P left local = inv TwL times Pw]
+    PR[P right local = inv TwR times Pw]
+    TLR[T left right = inv TwL times TwR]
+    GLR[Grip left and grip right]
+  end
+
+  subgraph G[BimanualGraphRep]
+    SL[Scene left nodes]
+    SR[Scene right nodes]
+    GLN[Gripper left nodes keypoints and grip]
+    GRN[Gripper right nodes keypoints and grip]
+    E1[Local edges scene scene scene gripper gripper gripper]
+    E2[Cross arm edges left to right and right to left]
+  end
+
+  ENC[GraphTransformer encoder]
+
+  subgraph D[Prediction Heads]
+    DT[Diffusion time embedding]
+    HL[Left heads dtrans drot dgrip]
+    HR[Right heads dtrans drot dgrip]
+  end
+
+  PW --> A
+  TLW --> A
+  TRW --> A
+  GL --> A
+  GR --> A
+
+  A --> PL
+  A --> PR
+  A --> TLR
+  A --> GLR
+
+  PL --> SL
+  PR --> SR
+  TLR --> E2
+  GLR --> GLN
+  GLR --> GRN
+  SL --> E1
+  SR --> E1
+  GLN --> E1
+  GRN --> E1
+
+  E1 --> ENC
+  E2 --> ENC
+  SL --> ENC
+  SR --> ENC
+  GLN --> ENC
+  GRN --> ENC
+
+  ENC --> DT
+  DT --> HL
+  DT --> HR
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>2) Invariance Contract (First Principles)</h2>
+      <div class="mermaid">
+flowchart TB
+  G[Global relabel transform g]
+
+  subgraph W0[Original World Terms]
+    PW0[Pw]
+    TL0[TwL]
+    TR0[TwR]
+    TLF0[TwL future]
+    TRF0[TwR future]
+  end
+
+  subgraph W1[Relabeled World Terms]
+    PW1[Pw relabeled = g times Pw]
+    TL1[TwL relabeled = g times TwL]
+    TR1[TwR relabeled = g times TwR]
+    TLF1[TwL future relabeled = g times TwL future]
+    TRF1[TwR future relabeled = g times TwR future]
+  end
+
+  subgraph INV[Model Relative Terms]
+    PLI[P left local = inv TwL times Pw]
+    PRI[P right local = inv TwR times Pw]
+    TLI[T left right = inv TwL times TwR]
+    DLI[dT left = inv TwL times TwL future]
+    DRI[dT right = inv TwR times TwR future]
+  end
+
+  subgraph INV2[After Relabeling]
+    PLI2[P left local unchanged]
+    PRI2[P right local unchanged]
+    TLI2[T left right unchanged]
+    DLI2[dT left unchanged]
+    DRI2[dT right unchanged]
+  end
+
+  G --> W1
+  W0 --> INV
+  W1 --> INV2
+      </div>
+    </section>
+
+    <section class="notes">
+      <h3>Slide Narration Notes</h3>
+      <ul>
+        <li>All high-bandwidth geometric signals are arm-local and relative.</li>
+        <li>Cross-arm coupling is explicit through T left right edge attributes.</li>
+        <li>Global world relabeling should not change physically relevant state.</li>
+      </ul>
+    </section>
+  </div>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      flowchart: { curve: 'linear', htmlLabels: true },
+      themeVariables: {
+        primaryColor: '#ffffff',
+        primaryTextColor: '#111827',
+        primaryBorderColor: '#0f766e',
+        lineColor: '#1f2937',
+        fontFamily: 'IBM Plex Sans, Segoe UI, sans-serif'
+      }
+    });
+  </script>
+</body>
+</html>

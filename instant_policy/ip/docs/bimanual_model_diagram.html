@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bimanual Representation Diagram</title>
+  <style>
+    body {
+      margin: 0;
+      background: #e5e7eb;
+      font-family: "Times New Roman", Times, serif;
+      color: #111827;
+    }
+    .wrap {
+      max-width: 1800px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    .panel {
+      background: #ffffff;
+      border-radius: 10px;
+      box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08);
+      padding: 12px;
+    }
+    img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 6px;
+    }
+    .meta {
+      margin-top: 10px;
+      font-size: 17px;
+      line-height: 1.35;
+    }
+    .meta code {
+      background: #f3f4f6;
+      padding: 0 4px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <img src="figures/bimanual_model_diagram.png" alt="Bimanual Figure-2 style representation diagram" />
+      <div class="meta">
+        Source contract: <code>ip/bimanual/graph_rep.py</code>.
+        Node types: <code>scene_left</code>, <code>scene_right</code>, <code>gripper_left</code>, <code>gripper_right</code>.
+        Edge types: 8 relation types with fixed color mapping in the figure legend.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

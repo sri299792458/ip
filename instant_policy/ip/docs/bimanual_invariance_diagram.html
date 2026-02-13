@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"/><title>Bimanual Invariance Diagram</title>
+<style>
+body{margin:0;font-family:"IBM Plex Sans","Segoe UI",sans-serif;background:#f4f6fb}
+.wrap{max-width:1600px;margin:0 auto;padding:20px}
+.card{background:#fff;border:1px solid #d1d5db;border-radius:14px;padding:12px;box-shadow:0 8px 20px rgba(17,24,39,.08)}
+h1{margin:0 0 10px;font-size:30px;color:#0f766e}
+.mermaid{padding:6px;overflow:auto}
+</style>
+</head><body><div class="wrap"><div class="card"><h1>Bimanual Invariance Contract</h1>
+<div class="mermaid">
+flowchart TB
+  G[Global relabel transform g]
+
+  subgraph W0[Original World Terms]
+    PW0[Pw]
+    TL0[TwL]
+    TR0[TwR]
+    TLF0[TwL future]
+    TRF0[TwR future]
+  end
+
+  subgraph W1[Relabeled World Terms]
+    PW1[Pw relabeled = g times Pw]
+    TL1[TwL relabeled = g times TwL]
+    TR1[TwR relabeled = g times TwR]
+    TLF1[TwL future relabeled = g times TwL future]
+    TRF1[TwR future relabeled = g times TwR future]
+  end
+
+  subgraph INV[Model Relative Terms]
+    PLI[P left local = inv TwL times Pw]
+    PRI[P right local = inv TwR times Pw]
+    TLI[T left right = inv TwL times TwR]
+    DLI[dT left = inv TwL times TwL future]
+    DRI[dT right = inv TwR times TwR future]
+  end
+
+  subgraph INV2[After Relabeling]
+    PLI2[P left local unchanged]
+    PRI2[P right local unchanged]
+    TLI2[T left right unchanged]
+    DLI2[dT left unchanged]
+    DRI2[dT right unchanged]
+  end
+
+  G --> W1
+  W0 --> INV
+  W1 --> INV2
+</div></div></div>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({startOnLoad:true,theme:'base',flowchart:{curve:'linear',htmlLabels:true},themeVariables:{primaryColor:'#ffffff',primaryTextColor:'#111827',primaryBorderColor:'#0f766e',lineColor:'#1f2937',fontFamily:'IBM Plex Sans, Segoe UI, sans-serif',fontSize:'18px'}});
+</script>
+</body></html>
