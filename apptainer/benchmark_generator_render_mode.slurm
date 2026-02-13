@@ -12,10 +12,11 @@
 # Optional overrides (sbatch --export=ALL,...):
 #   DATA_DIR=/scratch.global/$USER/ips
 #   SHAPENET_PATH=/workspace/data/shapenet
-#   BENCH_TASKS=64
+#   BENCH_TASKS=16
 #   DEMOS_PER_TASK_MIN=2
 #   DEMOS_PER_TASK_MAX=4
 #   PCD_DTYPE=float16
+#   BENCH_MODES=gpu,sw   (or just gpu / just sw)
 
 #SBATCH -A kdesingh
 #SBATCH -p msigpu
@@ -65,11 +66,14 @@ SHAPENET_PATH=${SHAPENET_PATH:-}
 INDEX_PATH=${INDEX_PATH:-/workspace/data/pseudo_ring/shapenet_index.json}
 MESH_PATH=${MESH_PATH:-/workspace/data/assets/robotiq_2f85_collision_open.obj}
 
-BENCH_TASKS=${BENCH_TASKS:-64}
+# Keep this small by default: benchmark should measure relative throughput quickly,
+# not produce a large dataset.
+BENCH_TASKS=${BENCH_TASKS:-16}
 BENCH_SEED=${BENCH_SEED:-1337}
 DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-2}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-4}
 PCD_DTYPE=${PCD_DTYPE:-float16}
+BENCH_MODES=${BENCH_MODES:-gpu,sw}
 
 DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
 VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
@@ -197,10 +201,15 @@ echo "Runner=$RUNNER"
 echo "ShapeNet host path=$HOST_SHAPENET"
 echo "Bench root host path=$HOST_BENCH_ROOT"
 echo "BENCH_TASKS=$BENCH_TASKS demos=$DEMOS_PER_TASK_MIN..$DEMOS_PER_TASK_MAX pcd_dtype=$PCD_DTYPE"
+echo "BENCH_MODES=$BENCH_MODES"
 echo "Starting generation-only backend benchmark..."
 
-run_case gpu 0 "$((DISPLAY_BASE + 1))" "$((VNC_BASE + 1))"
-run_case sw  1 "$((DISPLAY_BASE + 2))" "$((VNC_BASE + 2))"
+if [[ ",$BENCH_MODES," == *",gpu,"* ]]; then
+  run_case gpu 0 "$((DISPLAY_BASE + 1))" "$((VNC_BASE + 1))"
+fi
+if [[ ",$BENCH_MODES," == *",sw,"* ]]; then
+  run_case sw 1 "$((DISPLAY_BASE + 2))" "$((VNC_BASE + 2))"
+fi
 
 echo "----- Summary CSV -----"
 cat "$SUMMARY_CSV"

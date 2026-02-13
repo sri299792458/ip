@@ -2482,3 +2482,179 @@ Add a deterministic sweep script to tune attach thresholds from metrics, not fro
 
 ### User-visible Effect
 - Runs that do not override `DEMOS_PER_TASK_MIN/MAX` now sample between 2 and 4 demos per pseudo-task.
+
+## Throughput Semantics and Knob Systematization (2026-02-13)
+
+### Decision
+- Capture a single first-principles reference for:
+  - what rates we must compare (`C` vs `P`),
+  - what each runtime knob actually controls,
+  - how to validate software-vs-GPU rendering mode correctly.
+
+### Core Definitions (Steps Mode)
+- Training data unit: one `data_*.pt` file (one live-step sample).
+- One training iteration: one optimizer step over one batch.
+- Consumption rate:
+  - `C = (iterations_per_sec) * (batch_size)` in files/sec.
+- Generation rate:
+  - `P = (tasks_per_sec) * (files_per_task_avg)` in files/sec.
+- Reuse factor (freshness proxy):
+  - `r = C / P`.
+  - `r ~ 1` means near one-use-before-replacement.
+  - `r >> 1` means generator bottleneck / repeated reuse.
+- Ring refresh time:
+  - `refresh_time_sec = TRAIN_BUFFER_SIZE / P`.
+  - `TRAIN_BUFFER_SIZE` changes refresh window, not `r`.
+
+### Why This Resolves 1-Writer vs 16-Reader Confusion
+- `TRAIN_NUM_WORKERS=16` does not mean "16x unique data drain."
+- DataLoader workers parallelize CPU load/collate/prefetch for one trainer.
+- True drain is still `C` from trainer (`it/s * batch_size`).
+- A single generator worker is valid if `P` is sufficient relative to `C`.
+
+### GEN_CHUNK_TASKS Meaning
+- In current pipeline, generator loop repeatedly launches:
+  - `python -m ip.scripts.generate_pseudo_demos --num_tasks GEN_CHUNK_TASKS ...`
+- So `GEN_CHUNK_TASKS` is tasks per loop iteration, not ring size.
+- It mainly trades off:
+  - overhead amortization (larger chunk better),
+  - progress/control granularity (smaller chunk better),
+  - failure blast radius per chunk (smaller chunk better).
+- Approx files produced per chunk:
+  - `chunk_files ~= GEN_CHUNK_TASKS * files_per_task_avg`
+  - example: `256 * 165 ~= 42k files`.
+
+### CPU RAM Knobs (and Who Uses Them)
+- `TRAIN_SAMPLE_CACHE_SIZE`: per-worker LRU cache of loaded `data_*.pt` in CPU RAM.
+  - total cache capacity upper bound: `TRAIN_NUM_WORKERS * TRAIN_SAMPLE_CACHE_SIZE`.
+- `TRAIN_PREFETCH_FACTOR`: batches prepared ahead per worker (CPU RAM).
+- `pin_memory=True` (in `train.py`): pinned CPU transfer buffers for faster CPU->GPU copies.
+- These are CPU-side throughput knobs; they do not directly increase GPU VRAM usage.
+
+### Paper-Scale Mapping Sanity Check
+- Paper reports:
+  - `2.5M` optimization steps + `50K` cooldown,
+  - roughly `700K` unique trajectories.
+- With `batch_size=16`, processed step-samples are:
+  - `2.5M * 16 = 40M`.
+- Implied step-samples per trajectory:
+  - `40M / 700K ~= 57`.
+- This is consistent with observed order of magnitude in our step-sample pipeline.
+
+### Validation-Set Sizing Principle
+- Do not pick validation size only by train fraction.
+- Pick by target confidence interval on success-rate estimate.
+- Worst-case (`p=0.5`) trajectory counts:
+  - `~385` for +/-5%,
+  - `~1067` for +/-3%,
+  - `~2401` for +/-2% (95% CI half-width).
+- Convert to tasks using average trajectories per task (`~3` with demos range `2..4`).
+
+### Render Backend Verification: What Was Wrong and Fix
+- Root issue:
+  - `run_instant_policy_vnc.sh` used `apptainer exec --cleanenv`.
+  - `FORCE_SOFTWARE_RENDERING` was not guaranteed to propagate into container.
+- Fix:
+  - `apptainer/run_instant_policy_vnc.sh` now forwards
+    `APPTAINERENV_FORCE_SOFTWARE_RENDERING=${FORCE_SOFTWARE_RENDERING:-0}`.
+  - runner now prints explicit state:
+    - `Software GL rendering: enabled/disabled`.
+- Additional instrumentation:
+  - `apptainer/train_instant_policy.slurm` generator startup now logs:
+    - `[render_probe] FORCE_SOFTWARE_RENDERING=...`
+    - `[render_probe] PYOPENGL_PLATFORM=...`
+    - `[render_probe] platform=...`
+    - `[render_probe] vendor=...`
+    - `[render_probe] renderer=...`
+    - `[render_probe] version=...`
+
+### New Benchmark Utility for Deciding Software vs GPU Render
+- Added `apptainer/benchmark_generator_render_mode.slurm`.
+- It runs generation-only A/B in one job:
+  - case A: `FORCE_SOFTWARE_RENDERING=0`
+  - case B: `FORCE_SOFTWARE_RENDERING=1`
+- It records:
+  - elapsed time,
+  - tasks/sec, items/sec,
+  - actual GL backend (`platform/vendor/renderer`),
+  - summary CSV with `sw/gpu` ratios.
+
+### Local Testing Limitation Noted
+- Local direct-Python tests were not container-path equivalent.
+- In local env:
+  - both modes stayed on `EGLPlatform`,
+  - `OSMesa` backend unavailable (missing `libOSMesa`).
+- Therefore local A/B did not prove software-vs-GPU switching.
+- Cluster logs with render probe are the source of truth.
+
+## Operational Glossary and Numeric Contracts (2026-02-13)
+
+### Cluster Resource Terms
+- Node: one physical machine allocated by Slurm for the job.
+- `--cpus-per-task=24` means one process gets 24 logical CPU cores on that node (not 24 separate CPU sockets).
+- GPU VRAM and host RAM are separate pools:
+  - model/activations live in GPU VRAM,
+  - dataloader workers/cache/prefetch live in host RAM.
+
+### Exact Data-Unit Contract (Steps Mode)
+- One `data_*.pt` file is one trainable live-step sample.
+- File size is near-constant because tensor shapes are fixed (example observed ~`846K` per file).
+- Pseudo-task generation picks demos per task in `[DEMOS_PER_TASK_MIN, DEMOS_PER_TASK_MAX]` (current defaults `2..4`).
+- For horizon `H`, one demo with `T` valid waypoints contributes:
+  - `max(0, T - H)` step samples.
+- One task file count is:
+  - `files_per_task = sum_i max(0, T_i - H)` across demos in that task.
+- This is why `files/task` is an empirical average (e.g., ~165), not a fixed constant.
+
+Concrete schema example (`torch.load(data_0.pt)`):
+
+```text
+file: /scratch.global/kanth042/ips/pseudo_ring/task_buffer/data_0.pt
+type: Data
+root: Data = Data(pos_demos=[40960, 3], graps_demos=[1, 2, 10, 1], batch_demos=[40960], batch_pos_obs=[2048], demo_T_w_es=[1, 2, 10, 4, 4], pos_obs=[2048, 3], current_grip=[1], actions=[1, 8, 4, 4], actions_grip=[1, 8], T_w_e=[1, 4, 4])
+```
+
+### Valid Live-Timestep Rule
+- Training sample index `t` must have future targets through `t + H`.
+- So valid `t` range is `0 .. T-H-1`.
+- Example: if `T=165` and `H=8`, `t=164` is invalid because future targets do not exist.
+
+### Iteration/Batch/Runtime Math
+- One iteration = one optimizer update.
+- One iteration consumes exactly `BATCH_SIZE` step files.
+- Files consumed after `N` iterations:
+  - `consumed_files = N * BATCH_SIZE`.
+- If target is fixed updates (`N` fixed), wall-time depends on `it/s`.
+- If target is fixed processed files, effective speed is `it/s * BATCH_SIZE`.
+- Therefore if `it/s` holds and batch goes `16 -> 64`, processed files/sec is `4x`, and updates needed for same file budget are `1/4`.
+
+### Why OOM Can Happen with Low VRAM
+- DataLoader pressure is host-RAM dominated:
+  - `TRAIN_NUM_WORKERS` parallel file readers/collators.
+  - `TRAIN_PREFETCH_FACTOR` preloaded batches per worker.
+  - `TRAIN_SAMPLE_CACHE_SIZE` per-worker LRU sample cache.
+- Upper-bound loaded sample count in RAM can be large:
+  - `workers * prefetch_factor * batch_size` (prefetch queue) plus `workers * sample_cache_size` (LRU cache keys).
+- So host OOM kill can happen even when GPU memory utilization looks moderate.
+
+### LRU Cache Definition
+- `TRAIN_SAMPLE_CACHE_SIZE` is a per-worker Least Recently Used cache.
+- Cache key includes file path and `mtime` so replaced files invalidate and reload cleanly.
+
+### GEN_CHUNK_TASKS vs TRAIN_BUFFER_SIZE
+- `GEN_CHUNK_TASKS` controls producer burst size per generation loop call.
+- `TRAIN_BUFFER_SIZE` controls ring capacity (how many files are retained/eligible).
+- They are orthogonal:
+  - chunk size tunes write burst overhead/granularity,
+  - buffer size tunes freshness window and replacement cadence.
+
+### Validation Sizing Principle
+- There is no universal fixed validation fraction `rho`.
+- Choose validation size by target confidence interval on success-rate estimate.
+- Fraction can become very small at scale (including around `~0.05%`) and still be statistically sufficient, depending on desired CI width.
+
+### Paper Runtime Cross-Check
+- If training budget is `2.5M` optimizer steps over `5` days:
+  - required update rate is `2.5e6 / (5*24*3600) ~= 5.79 it/s`.
+- This check should be done in `it/s` (updates/sec), not only samples/sec.
+- Increasing batch size changes samples/sec, but paper-matching wall-time for fixed step budget still depends on sustained `it/s`.
