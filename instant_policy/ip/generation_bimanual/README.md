@@ -88,6 +88,29 @@ python -m ip.scripts.generate_bimanual_pseudo_demos \
   --render_visual_height 800
 ```
 
+Debug by primitive family (single script, one representative task per primitive):
+
+```bash
+bash instant_policy/ip/scripts/generate_bimanual_pseudo_debug_by_skill.sh \
+  --shapenet_path /workspace/data/shapenet \
+  --gripper_mesh_path /workspace/data/assets/robotiq_2f85_collision_open.obj \
+  --save_root /workspace/data/pseudo_bimanual/debug_by_skill \
+  --num_samples_per_skill 8
+```
+
+The script creates one folder per primitive:
+- `cooperative_lift`
+- `dual_push_sync`
+- `dual_push_transport`
+- `container_open_place_remove`
+- `handover`
+- `two_endpoint_tension`
+- `tool_plus_receptacle`
+
+Each primitive folder contains:
+- `tasks/` (`task_*.pt`)
+- `videos/` (debug videos)
+
 Ring-buffer mode:
 
 ```bash

@@ -86,6 +86,44 @@ Use `trajectory` for large-scale continuous generation.
 7. Apply 10% gripper-state corruption to stored labels (not to attachment dynamics).
 8. Store in chosen format (`steps` or `trajectory`).
 
+### How Step 2 Works: Object-Centric Waypoint Specs
+
+The waypoint sampler first chooses a skill program, then stores waypoint poses in a way that keeps
+them tied to objects instead of tied to absolute world coordinates.
+
+Skill selection (`waypoint_sampler.py`):
+- If `--force_skill` is set, that skill is used directly (`random`, `grasp`, `pick_place`, `pull`, `push`).
+- Otherwise:
+  - with probability `bias_prob` (default `0.5`), sample one structured skill from
+    `{grasp, pick_place, pull, push}`,
+  - else use `random` waypoint sampling.
+
+Per-waypoint object pose sampling:
+- For object-linked waypoints, we sample a mesh surface point and outward normal on the chosen object.
+- Top-down approach is used most of the time (`~70%`), otherwise side-approach from the surface normal.
+- A small clearance offset is applied so the gripper does not start in penetration.
+- This yields a world pose candidate for the waypoint.
+
+Object-centric encoding (the key step):
+- If a waypoint targets object `k`, we store:
+  - `obj_index = k`
+  - `pose_local = inv(T_w_obj_k) @ pose_world`
+- If waypoint is global/free-space (no target object), we store:
+  - `obj_index = None`
+  - `pose = pose_world`
+
+Why this matters:
+- During demo generation, each demo perturbs scene/object poses.
+- Waypoints are then resolved back to world via:
+  - `pose_world_demo = T_w_obj_k_demo @ pose_local`
+- So the waypoint stays attached to the same semantic place on the object across scene perturbations.
+- This gives object-centric consistency and avoids baking in absolute world-frame shortcuts.
+
+Gripper-state sequencing:
+- Structured skills define explicit open/close phases (e.g., pregrasp-open -> grasp-close -> lift-close).
+- Random skill samples waypoint count in `num_waypoints_range` and inserts a small number of grip flips.
+- These states drive attach/detach events later in the pipeline (close/open transitions).
+
 ## Gripper Mesh Policy
 
 - `--gripper_mesh_path` is required.
