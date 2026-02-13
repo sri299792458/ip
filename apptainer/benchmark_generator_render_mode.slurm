@@ -74,6 +74,7 @@ DEMOS_PER_TASK_MIN=${DEMOS_PER_TASK_MIN:-2}
 DEMOS_PER_TASK_MAX=${DEMOS_PER_TASK_MAX:-4}
 PCD_DTYPE=${PCD_DTYPE:-float16}
 BENCH_MODES=${BENCH_MODES:-gpu,sw}
+SW_RENDER_PLATFORM=${SW_RENDER_PLATFORM:-osmesa}
 
 DISPLAY_BASE=${DISPLAY_BASE:-$((200 + (${SLURM_JOB_ID:-0} % 200)))}
 VNC_BASE=${VNC_BASE:-$((20000 + (${SLURM_JOB_ID:-0} % 10000)))}
@@ -135,6 +136,12 @@ run_case() {
 
   local case_log="$DATA_DIR/logs/ip_genbench_${SLURM_JOB_ID:-manual}_${mode}.log"
   local t0 t1 dt items tps ips
+  local py_platform
+  if [ "$force_sw" = "1" ]; then
+    py_platform="$SW_RENDER_PLATFORM"
+  else
+    py_platform="egl"
+  fi
   t0="$(date +%s)"
 
   echo "[$mode] starting (FORCE_SOFTWARE_RENDERING=$force_sw)..."
@@ -143,29 +150,8 @@ run_case() {
   RLBENCH_DISPLAY="$disp" \
   RLBENCH_VNC_PORT="$vnc" \
   "$RUNNER" "set -euo pipefail
-export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
-python - <<'PY'
-import os
-try:
-    import pyrender
-    from OpenGL import GL
-    r = pyrender.OffscreenRenderer(64, 64)
-    plat = type(getattr(r, '_platform', None)).__name__
-    def dec(x):
-        if isinstance(x, (bytes, bytearray)):
-            return x.decode('utf-8', errors='ignore')
-        return str(x)
-    vendor = dec(GL.glGetString(GL.GL_VENDOR))
-    renderer = dec(GL.glGetString(GL.GL_RENDERER))
-    print(f\"[render_probe] FORCE_SOFTWARE_RENDERING={os.environ.get('FORCE_SOFTWARE_RENDERING', '')}\")
-    print(f\"[render_probe] PYOPENGL_PLATFORM={os.environ.get('PYOPENGL_PLATFORM', '')}\")
-    print(f\"[render_probe] platform={plat}\")
-    print(f\"[render_probe] vendor={vendor}\")
-    print(f\"[render_probe] renderer={renderer}\")
-    r.delete()
-except Exception as exc:
-    print(f\"[render_probe] ERROR: {exc}\")
-PY
+export PYOPENGL_PLATFORM=$py_platform
+python -m ip.scripts.probe_render_backend --platform $py_platform --strict
 python -m ip.scripts.generate_pseudo_demos \
   --shapenet_path \"$SHAPENET_PATH\" \
   --shapenet_index_path \"$INDEX_PATH\" \
@@ -195,10 +181,14 @@ python -m ip.scripts.generate_pseudo_demos \
   else
     status="failed:$rc"
   fi
+  # If "software" case still resolves to NVIDIA EGL, backend did not switch.
+  if [ "$force_sw" = "1" ] && [[ "${plat:-}" == "EGLPlatform" ]] && [[ "${vendor:-}" == *NVIDIA* ]]; then
+    status="invalid_backend"
+  fi
 
   echo "$mode,$force_sw,$status,$dt,$BENCH_TASKS,$items,$tps,$ips,\"$plat\",\"$vendor\",\"$renderer\",\"$case_log\"" >> "$SUMMARY_CSV"
 
-  echo "[$mode] status=$status elapsed_s=$dt num_tasks=$BENCH_TASKS num_items=$items tasks_per_s=$tps items_per_s=$ips"
+  echo "[$mode] status=$status elapsed_s=$dt num_tasks=$BENCH_TASKS num_items=$items tasks_per_s=$tps items_per_s=$ips pyopengl_platform=$py_platform"
   echo "[$mode] render_platform=$plat"
   echo "[$mode] gl_vendor=$vendor"
   echo "[$mode] gl_renderer=$renderer"
