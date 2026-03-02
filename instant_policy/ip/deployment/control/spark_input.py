@@ -315,7 +315,7 @@ class SparkDemoInput:
         serial_device: str,
         profile_name: str = "lightning",
         offsets_pickle: Optional[str] = None,
-        command_rate_hz: float = 200.0,
+        command_rate_hz: float = 100.0,
         stale_timeout_s: float = 0.25,
         initial_packet_timeout_s: float = 8.0,
         enforce_profile_stream_match: bool = True,

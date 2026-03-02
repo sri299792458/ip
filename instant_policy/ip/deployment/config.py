@@ -53,10 +53,10 @@ class RTDEControlConfig:
     # NOTE: For UR servoJ/servoL in RTDE, speed/acceleration are currently not used.
     servo_speed: float = 0.25
     servo_acceleration: float = 1.2
-    # e-Series default servo period is 2ms.
-    servo_time: float = 0.002
-    servo_lookahead: float = 0.1
-    servo_gain: int = 300
+    # Matched to legacy Spark ROS teleop defaults for comparable feel/response.
+    servo_time: float = 0.001
+    servo_lookahead: float = 0.05
+    servo_gain: int = 200
 
 
 @dataclass
