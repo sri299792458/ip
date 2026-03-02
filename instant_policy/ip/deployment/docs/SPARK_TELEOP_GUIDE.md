@@ -37,6 +37,10 @@ Useful options (same shared collector path):
 - `--spark-serial`: required when `--demo-control spark`
 - `--spark-profile`: `lightning` or `thunder` (offset + gripper mapping defaults)
 - `--spark-offsets-pickle`: optional override for offsets file path
+  - default (lightning): `ip/deployment/assets/spark/offsets_lightning.pickle`
+  - default (thunder): `ip/deployment/assets/spark/offsets_thunder.pickle`
+- Safety check: startup fails if selected `--spark-profile` does not match stream `ID`.
+- `--spark-allow-id-mismatch`: bypasses that safety check (for legacy firmware where stream ID can be swapped/mis-labeled).
 
 ## Notes
 - Spark mode does not use pendant freedrive.
@@ -45,4 +49,4 @@ Useful options (same shared collector path):
   - `Stop + Save` ends and saves.
   - `Cancel` or window close discards recording.
 - Demo output format is the same as keyboard mode.
-- If a configured offsets pickle path is missing, collection fails fast.
+- If a configured/default offsets pickle path is missing, collection fails fast.

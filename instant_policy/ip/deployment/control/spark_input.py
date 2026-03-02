@@ -21,14 +21,17 @@ except Exception as exc:  # pragma: no cover - dependency may be missing in some
 else:
     _SERIAL_IMPORT_ERROR = None
 
+DEPLOYMENT_DIR = Path(__file__).resolve().parents[1]
+SPARK_ASSETS_DIR = DEPLOYMENT_DIR / "assets" / "spark"
+
 
 LIGHTNING_OFFSET_RAD = [
-    -1.0215797424316406,
-    -4.490872740745544,
-    -1.4827108010649681,
-    -0.588315486907959,
-    -0.5356001891195774,
-    2.0629922747612,
+    -1.06043816,
+    -4.28556144,
+    -1.23235792,
+    -1.21208322,
+    -0.60609466,
+    1.96014991,
     0.0,
 ]
 
@@ -58,8 +61,8 @@ SPARK_PROFILES = {
         name="lightning",
         joint_offset_rad=list(LIGHTNING_OFFSET_RAD),
         invert=[-1, -1, 1, -1, -1, -1, -1],
-        grip_raw_min=-4.8,
-        grip_raw_max=-2.3,
+        grip_raw_min=-0.4,
+        grip_raw_max=0.25,
         offsets_filename="offsets_lightning.pickle",
     ),
     "thunder": SparkProfile(
@@ -74,21 +77,7 @@ SPARK_PROFILES = {
 
 
 def _discover_offsets_pickle(filename: str) -> str:
-    module_path = Path(__file__).resolve()
-    candidates: list[Path] = []
-    for parent in module_path.parents:
-        candidates.append(parent / "SPARK-Remote-data_collection" / "TeleopSoftware" / "Spark" / filename)
-    candidates.append(Path.cwd() / "SPARK-Remote-data_collection" / "TeleopSoftware" / "Spark" / filename)
-    candidates.append(Path.cwd() / ".." / "SPARK-Remote-data_collection" / "TeleopSoftware" / "Spark" / filename)
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if resolved.exists():
-            return str(resolved)
-    return ""
+    return str((SPARK_ASSETS_DIR / filename).resolve())
 
 
 def _map_value(
@@ -328,6 +317,8 @@ class SparkDemoInput:
         offsets_pickle: Optional[str] = None,
         command_rate_hz: float = 200.0,
         stale_timeout_s: float = 0.25,
+        initial_packet_timeout_s: float = 8.0,
+        enforce_profile_stream_match: bool = True,
     ):
         profile_key = str(profile_name).lower()
         if profile_key not in SPARK_PROFILES:
@@ -336,12 +327,17 @@ class SparkDemoInput:
                 f"Expected one of: {sorted(SPARK_PROFILES.keys())}"
             )
         self.profile = SPARK_PROFILES[profile_key]
-        discovered = _discover_offsets_pickle(self.profile.offsets_filename)
-        selected_offsets_pickle = offsets_pickle if offsets_pickle is not None else discovered
+        selected_offsets_pickle = (
+            offsets_pickle
+            if offsets_pickle is not None
+            else _discover_offsets_pickle(self.profile.offsets_filename)
+        )
         self._state = state
         self._control = control
         self._rate_hz = float(command_rate_hz)
         self._stale_timeout_s = float(stale_timeout_s)
+        self._initial_packet_timeout_s = float(initial_packet_timeout_s)
+        self._enforce_profile_stream_match = bool(enforce_profile_stream_match)
         self._device = SparkDevice(
             SparkDeviceConfig(
                 arm=self.profile.name,
@@ -371,12 +367,11 @@ class SparkDemoInput:
                 if sample is not None:
                     stale = (t0 - float(sample.timestamp)) > self._stale_timeout_s
                 can_command = sample is not None and (not stale) and bool(sample.enable_switch)
+                command_joints = None
+                spark_angles = None
 
-                if not can_command and self._was_commanding:
-                    self._control.stop_motion()
-                    self._was_commanding = False
-
-                if can_command:
+                # Keep alignment preview live in GUI even when enable_switch is OFF.
+                if sample is not None and not stale:
                     spark_angles = np.asarray(sample.angles_rad, dtype=np.float64).reshape(7)
                     if not self._wrap_initialized:
                         actual_q = self._state.get_actual_q()
@@ -386,9 +381,18 @@ class SparkDemoInput:
                         elif dq0 < -np.pi:
                             self._base_wrap_adjust_rad = 2.0 * np.pi
                         self._wrap_initialized = True
-
                     command_joints = spark_angles[:6] + offset[:6]
                     command_joints[0] += self._base_wrap_adjust_rad
+                    with self._lock:
+                        self._last_command_joints = np.asarray(command_joints, dtype=np.float64).copy()
+
+                if not can_command and self._was_commanding:
+                    self._control.stop_motion()
+                    self._was_commanding = False
+
+                if can_command:
+                    if command_joints is None or spark_angles is None:
+                        raise RuntimeError("Spark packet became stale before command execution.")
                     ok = self._control.execute_joint_positions(command_joints.tolist())
                     if not ok:
                         raise RuntimeError("Spark servoJ command failed")
@@ -414,7 +418,6 @@ class SparkDemoInput:
                     self._control.set_gripper_closed_norm(grip_closed)
                     with self._lock:
                         self._last_open_command = float(1.0 - grip_closed)
-                        self._last_command_joints = np.asarray(command_joints, dtype=np.float64).copy()
                     self._was_commanding = True
 
                 with self._lock:
@@ -434,10 +437,14 @@ class SparkDemoInput:
 
     def start(self) -> None:
         self._device.start()
-        deadline = time.time() + 3.0
+        # Opening a CP210x/ESP board can briefly reset firmware; allow enough
+        # time for the first NUL-terminated Spark packet to arrive.
+        deadline = time.time() + max(self._initial_packet_timeout_s, 0.5)
+        initial_sample = None
         while time.time() < deadline:
             sample = self._device.get_latest()
             if sample is not None:
+                initial_sample = sample
                 break
             err = self._device.get_last_error()
             if err:
@@ -447,6 +454,20 @@ class SparkDemoInput:
         else:
             self._device.stop()
             raise RuntimeError("Timed out waiting for initial Spark packet.")
+        if initial_sample is not None:
+            stream_id = str(initial_sample.device_id).strip().lower()
+            if stream_id in SPARK_PROFILES and stream_id != self.profile.name:
+                msg = (
+                    "Spark profile/stream mismatch: "
+                    f"profile={self.profile.name!r} but serial stream reports ID={stream_id!r}."
+                )
+                if self._enforce_profile_stream_match:
+                    self._device.stop()
+                    raise RuntimeError(
+                        f"{msg} Use matching --spark-serial and --spark-profile, or pass "
+                        "--spark-allow-id-mismatch for legacy firmware ID behavior."
+                    )
+                print(f"[warn] {msg} Continuing because mismatch enforcement is disabled.")
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()

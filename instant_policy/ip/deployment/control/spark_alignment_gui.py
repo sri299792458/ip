@@ -151,7 +151,7 @@ class SparkAlignmentGui:
         try:
             monitor = self._spark_input.get_monitor_state()
             if monitor.command_joints is None:
-                raise RuntimeError("No Spark command yet. Move Spark and enable switch.")
+                raise RuntimeError("No Spark command yet. Move Spark to update preview.")
             actual_q = self._state.get_actual_q()
             dx, dy, dz = _compute_xyz_error(monitor.command_joints, actual_q, self._profile_name)
 

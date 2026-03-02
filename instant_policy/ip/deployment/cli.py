@@ -212,7 +212,18 @@ def main():
     parser.add_argument(
         "--spark-offsets-pickle",
         default=None,
-        help="Optional path override for Spark offsets pickle.",
+        help=(
+            "Optional path override for Spark offsets pickle. "
+            "Default is profile-specific file under ip/deployment/assets/spark/."
+        ),
+    )
+    parser.add_argument(
+        "--spark-allow-id-mismatch",
+        action="store_true",
+        help=(
+            "Allow running when Spark stream ID does not match --spark-profile. "
+            "Use only for legacy firmware ID mapping behavior."
+        ),
     )
     parser.add_argument(
         "--debug-demo-waypoints",
@@ -335,6 +346,7 @@ def main():
                 serial_device=args.spark_serial,
                 profile_name=args.spark_profile,
                 offsets_pickle=args.spark_offsets_pickle,
+                enforce_profile_stream_match=not args.spark_allow_id_mismatch,
             )
         try:
             raw_demo = collector.collect_kinesthetic(
