@@ -99,8 +99,25 @@ def main():
         metavar=("X", "Y", "Z"),
         help="Policy origin offset from flange in meters (applied in code to RTDE flange pose).",
     )
+    parser.add_argument(
+        "--move-speed",
+        type=float,
+        default=REPLAY_MOVE_SPEED_M_S,
+        help=f"moveL speed in m/s (default: {REPLAY_MOVE_SPEED_M_S}).",
+    )
+    parser.add_argument(
+        "--move-acceleration",
+        type=float,
+        default=REPLAY_MOVE_ACCEL_M_S2,
+        help=f"moveL acceleration in m/s^2 (default: {REPLAY_MOVE_ACCEL_M_S2}).",
+    )
     parser.add_argument("--use-gripper", action="store_true", help="Replay gripper commands from demo")
     args = parser.parse_args()
+
+    if args.move_speed <= 0:
+        raise ValueError(f"--move-speed must be > 0, got {args.move_speed}")
+    if args.move_acceleration <= 0:
+        raise ValueError(f"--move-acceleration must be > 0, got {args.move_acceleration}")
 
     demo_path = Path(args.demo)
     demo = _load_demo(demo_path)
@@ -131,8 +148,8 @@ def main():
 
     rtde_cfg = RTDEControlConfig(
         control_mode="moveL",
-        move_speed=REPLAY_MOVE_SPEED_M_S,
-        move_acceleration=REPLAY_MOVE_ACCEL_M_S2,
+        move_speed=float(args.move_speed),
+        move_acceleration=float(args.move_acceleration),
     )
     rtde_control = URRTDEControl.connect(args.robot_ip, rtde_cfg)
     rtde_receive_iface = URRTDEState.connect(args.robot_ip)
@@ -158,6 +175,7 @@ def main():
 
     print("ROBOT RTDE TCP FRAME = FLANGE (fixed)")
     print(f"POLICY ORIGIN OFFSET FROM FLANGE (m) = {tcp_offset.tolist()}")
+    print(f"REPLAY moveL speed/accel = {rtde_cfg.move_speed} m/s, {rtde_cfg.move_acceleration} m/s^2")
     print(f"Replaying {len(idxs)} frames (stride={args.stride}).")
 
     if args.go_start:
