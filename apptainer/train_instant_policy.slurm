@@ -77,16 +77,12 @@ AUTO_RESUME=${AUTO_RESUME:-1}
 RESUME_CKPT=${RESUME_CKPT:-}
 WANDB_ID=${WANDB_ID:-}
 WANDB_RESUME=${WANDB_RESUME:-allow}
-EXTRA_TRAIN_ARGS=${EXTRA_TRAIN_ARGS:-}
-NUM_ITERS_OVERRIDE=${NUM_ITERS_OVERRIDE:-}
 TRAIN_NUM_WORKERS=${TRAIN_NUM_WORKERS:-8}
 TRAIN_PERSISTENT_WORKERS=${TRAIN_PERSISTENT_WORKERS:-1}
 TRAIN_PREFETCH_FACTOR=${TRAIN_PREFETCH_FACTOR:-4}
 TRAIN_SAMPLE_CACHE_SIZE=${TRAIN_SAMPLE_CACHE_SIZE:-2048}
 TRAIN_VAL_CHECK_INTERVAL=${TRAIN_VAL_CHECK_INTERVAL:-20000}
 TRAIN_LOG_EVERY_N_STEPS=${TRAIN_LOG_EVERY_N_STEPS:-500}
-TRAIN_DEVICES=${TRAIN_DEVICES:-1}
-TRAIN_STRATEGY=${TRAIN_STRATEGY:-auto}
 
 # Ring/generation settings.
 TRAIN_BUFFER_SIZE=${TRAIN_BUFFER_SIZE:-8192}
@@ -113,7 +109,6 @@ VAL_FORCE_REBUILD=${VAL_FORCE_REBUILD:-0}
 VAL_NUM_TASKS=${VAL_NUM_TASKS:-100}
 VAL_TASK_START=${VAL_TASK_START:-200000000}
 VAL_SEED=${VAL_SEED:-424242}
-DEBUG_VAL_DIAGNOSTICS=${DEBUG_VAL_DIAGNOSTICS:-0}
 
 if [ ! -x "$RUNNER" ]; then
   echo "ERROR: runner not found or not executable: ${RUNNER:-<unset>}"
@@ -143,47 +138,6 @@ count_data_files() {
     return
   fi
   find "$d" -maxdepth 1 -type f -name "$DATA_FILE_GLOB" | wc -l | tr -d ' '
-}
-
-debug_val_diagnostics() {
-  local stage="$1"
-  if [ "$DEBUG_VAL_DIAGNOSTICS" != "1" ]; then
-    return
-  fi
-
-  echo "[VAL_DEBUG][$stage] DATA_DIR=$DATA_DIR"
-  echo "[VAL_DEBUG][$stage] HOST_VAL_DIR=$HOST_VAL_DIR"
-  echo "[VAL_DEBUG][$stage] VAL_DATA_DIR=$VAL_DATA_DIR"
-  if [ -d "$HOST_VAL_DIR" ]; then
-    local host_count
-    host_count="$(count_data_files "$HOST_VAL_DIR")"
-    echo "[VAL_DEBUG][$stage] host ${DATA_FILE_GLOB} count=$host_count"
-    find "$HOST_VAL_DIR" -maxdepth 1 -type f -name "$DATA_FILE_GLOB" | sort | head -n 20
-  else
-    echo "[VAL_DEBUG][$stage] host val dir missing"
-  fi
-
-  local dbg_display dbg_vnc
-  dbg_display=$((DISPLAY_BASE + 99))
-  dbg_vnc=$((VNC_BASE + 99))
-  RLBENCH_DISPLAY=$dbg_display RLBENCH_VNC_PORT=$dbg_vnc "$RUNNER" "set -euo pipefail
-python - <<'PY'
-import glob, os
-p = \"$VAL_DATA_DIR\"
-pattern = \"$DATA_FILE_GLOB\"
-matches = sorted(glob.glob(os.path.join(p, pattern)))
-print('[VAL_DEBUG][$stage] container cwd=', os.getcwd())
-print('[VAL_DEBUG][$stage] container path=', p)
-print('[VAL_DEBUG][$stage] container exists=', os.path.isdir(p))
-print('[VAL_DEBUG][$stage] container count=', len(matches))
-print('[VAL_DEBUG][$stage] container sample=', matches[:20])
-parent = os.path.dirname(p.rstrip('/')) or '/'
-print('[VAL_DEBUG][$stage] container parent=', parent)
-try:
-    print('[VAL_DEBUG][$stage] container parent entries=', sorted(os.listdir(parent))[:50])
-except Exception as exc:
-    print('[VAL_DEBUG][$stage] container parent list error=', repr(exc))
-PY"
 }
 
 read_cpu_tot_idle() {
@@ -349,18 +303,12 @@ echo "Starting unified pipeline on $(hostname)"
 echo "run_name=$RUN_NAME format=$DATA_FORMAT batch_size=$BATCH_SIZE"
 echo "shapenet_path=$SHAPENET_PATH (host: $HOST_SHAPENET)"
 echo "auto_resume=$AUTO_RESUME use_wandb=$USE_WANDB"
-echo "compile_models=$COMPILE_MODELS devices=$TRAIN_DEVICES strategy=$TRAIN_STRATEGY"
+echo "compile_models=$COMPILE_MODELS"
 echo "num_workers=$TRAIN_NUM_WORKERS prefetch=$TRAIN_PREFETCH_FACTOR val_interval=$TRAIN_VAL_CHECK_INTERVAL"
 echo "sample_cache_size=$TRAIN_SAMPLE_CACHE_SIZE"
 echo "ring_buffer_size=$TRAIN_BUFFER_SIZE train_start_min_items=$TRAIN_START_MIN_ITEMS timeout_s=$TRAIN_START_TIMEOUT_SEC"
 echo "generator=single chunk_tasks=$GEN_CHUNK_TASKS"
 echo "data_file_glob=$DATA_FILE_GLOB storage_format=$GEN_STORAGE_FORMAT"
-if [ "$DEBUG_VAL_DIAGNOSTICS" = "1" ]; then
-  echo "DEBUG_VAL_DIAGNOSTICS=1"
-fi
-if [ -n "$NUM_ITERS_OVERRIDE" ]; then
-  echo "num_iters_override=$NUM_ITERS_OVERRIDE"
-fi
 if [ -n "$RESUME_CKPT" ]; then
   echo "resume_ckpt=$RESUME_CKPT"
 fi
@@ -373,7 +321,6 @@ python -m ip.scripts.build_robotiq_mesh --out \"$MESH_PATH\" --source collision 
 fi
 
 # Build/rebuild validation set if needed.
-debug_val_diagnostics "before_val_build"
 VAL_COUNT="$(count_data_files "$HOST_VAL_DIR")"
 if [ "$VAL_FORCE_REBUILD" = "1" ]; then
   echo "VAL_FORCE_REBUILD=1, clearing validation files (${DATA_FILE_GLOB}) in $HOST_VAL_DIR"
@@ -396,12 +343,10 @@ python -m ip.scripts.generate_pseudo_demos \
   --num_demos_per_task $DEMOS_PER_TASK_MIN $DEMOS_PER_TASK_MAX \
   --gripper_mesh_path \"$MESH_PATH\""
 fi
-debug_val_diagnostics "after_val_build"
 
 VAL_COUNT="$(count_data_files "$HOST_VAL_DIR")"
 TRAIN_COUNT="$(count_data_files "$HOST_TRAIN_DIR")"
 echo "val_items=$VAL_COUNT train_items=$TRAIN_COUNT"
-debug_val_diagnostics "before_train"
 if [ "$VAL_COUNT" -eq 0 ]; then
   echo "ERROR: validation set is empty at $HOST_VAL_DIR"
   exit 1
@@ -426,30 +371,6 @@ start_generators() {
   local gen_seed="$TRAIN_GEN_SEED"
   RLBENCH_DISPLAY=$gen_display RLBENCH_VNC_PORT=$gen_vnc_port "$RUNNER" "set -euo pipefail
 export PYOPENGL_PLATFORM=\${PYOPENGL_PLATFORM:-egl}
-# One-shot render backend probe so logs show the actual GL stack in use.
-python - <<'PY'
-import os
-try:
-    import pyrender
-    from OpenGL import GL
-    r = pyrender.OffscreenRenderer(64, 64)
-    platform = type(getattr(r, '_platform', None)).__name__
-    def dec(x):
-        if isinstance(x, (bytes, bytearray)):
-            return x.decode('utf-8', errors='ignore')
-        return str(x)
-    vendor = dec(GL.glGetString(GL.GL_VENDOR))
-    renderer = dec(GL.glGetString(GL.GL_RENDERER))
-    version = dec(GL.glGetString(GL.GL_VERSION))
-    print(f\"[render_probe] PYOPENGL_PLATFORM={os.environ.get('PYOPENGL_PLATFORM', '')}\")
-    print(f\"[render_probe] platform={platform}\")
-    print(f\"[render_probe] vendor={vendor}\")
-    print(f\"[render_probe] renderer={renderer}\")
-    print(f\"[render_probe] version={version}\")
-    r.delete()
-except Exception as exc:
-    print(f\"[render_probe] ERROR: {exc}\")
-PY
 TASK_START=$GEN_TASK_START
 while true; do
   T0=\$(date +%s)
@@ -521,11 +442,6 @@ wait_for_train_data() {
 
 wait_for_train_data "$TRAIN_START_MIN_ITEMS" "$TRAIN_START_TIMEOUT_SEC"
 
-ITER_OVERRIDE_ARGS=""
-if [ -n "$NUM_ITERS_OVERRIDE" ]; then
-  ITER_OVERRIDE_ARGS="--num_iters_override $NUM_ITERS_OVERRIDE"
-fi
-
 RESUME_ARGS=""
 if [ -n "$RESUME_CKPT" ]; then
   RESUME_ARGS="--resume_ckpt_path \"$RESUME_CKPT\""
@@ -550,7 +466,6 @@ train_start_ts=$(date +%s)
 TRAIN_DISPLAY=${TRAIN_DISPLAY:-$DISPLAY_BASE}
 TRAIN_VNC_PORT=${TRAIN_VNC_PORT:-$VNC_BASE}
 RLBENCH_DISPLAY=$TRAIN_DISPLAY RLBENCH_VNC_PORT=$TRAIN_VNC_PORT "$RUNNER" "set -euo pipefail
-export IP_DEBUG_PATHS=$DEBUG_VAL_DIAGNOSTICS
 mkdir -p \"$SAVE_ROOT\"
 python /workspace/instant_policy/ip/train.py \
   --run_name \"$RUN_NAME\" \
@@ -569,13 +484,9 @@ python /workspace/instant_policy/ip/train.py \
   --sample_cache_size $TRAIN_SAMPLE_CACHE_SIZE \
   --val_check_interval $TRAIN_VAL_CHECK_INTERVAL \
   --log_every_n_steps $TRAIN_LOG_EVERY_N_STEPS \
-  --devices $TRAIN_DEVICES \
-  --strategy \"$TRAIN_STRATEGY\" \
   --save_path \"$SAVE_ROOT\" \
   $RESUME_ARGS \
-  $WANDB_ARGS \
-  $ITER_OVERRIDE_ARGS \
-  $EXTRA_TRAIN_ARGS" &
+  $WANDB_ARGS" &
 TRAINER_PID="$!"
 if [ -n "${TRAINER_PID_FILE:-}" ]; then
   printf "%s\n" "$TRAINER_PID" > "$TRAINER_PID_FILE"

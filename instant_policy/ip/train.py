@@ -76,21 +76,6 @@ def _align_checkpoint_state_dict_for_model(ckpt_path: str, model: torch.nn.Modul
     return aligned_path
 
 
-def _debug_dataset_path(label: str, path: str, pattern: str, max_items: int = 20):
-    abs_path = os.path.abspath(path)
-    matches = sorted(glob(os.path.join(path, pattern)))
-    print(f"[PATH_DEBUG] {label} cwd={os.getcwd()}")
-    print(f"[PATH_DEBUG] {label} path={path} abs={abs_path} exists={os.path.isdir(path)}")
-    print(f"[PATH_DEBUG] {label} pattern={pattern} count={len(matches)} sample={matches[:max_items]}")
-
-    parent = os.path.dirname(path.rstrip(os.sep)) or os.sep
-    try:
-        parent_entries = sorted(os.listdir(parent))[:50]
-    except Exception as exc:
-        parent_entries = [f"<list-error: {exc}>"]
-    print(f"[PATH_DEBUG] {label} parent={parent} entries={parent_entries}")
-
-
 if __name__ == '__main__':
     # Prefer Tensor Core throughput on modern GPUs (A100, etc.).
     torch.set_float32_matmul_precision('high')
@@ -118,8 +103,6 @@ if __name__ == '__main__':
                         help='Batch size for fine-tuning. When not fine-tuning, it is defined in the config')
     parser.add_argument('--data_path_val', type=str, default='./data/val',
                         help='Path to the validation data.')
-    parser.add_argument('--num_iters_override', type=int, default=None,
-                        help='Optional override for total training steps (useful for throughput benchmarking).')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='DataLoader worker count.')
     parser.add_argument('--persistent_workers', type=int, default=1,
@@ -132,10 +115,6 @@ if __name__ == '__main__':
                         help='Validation check interval in optimizer steps.')
     parser.add_argument('--log_every_n_steps', type=int, default=500,
                         help='Logging interval in optimizer steps.')
-    parser.add_argument('--devices', type=int, default=1,
-                        help='Number of GPUs/devices for Lightning trainer.')
-    parser.add_argument('--strategy', type=str, default='auto',
-                        help='Lightning strategy, e.g. auto or ddp.')
     parser.add_argument('--resume_ckpt_path', type=str, default=None,
                         help='Resume full trainer state from this checkpoint path.')
     parser.add_argument('--auto_resume', action='store_true',
@@ -146,8 +125,6 @@ if __name__ == '__main__':
                         help='W&B resume policy when wandb logging is enabled.')
 
     args = parser.parse_args()
-    debug_paths = os.environ.get("IP_DEBUG_PATHS", "0") == "1"
-
     record = bool(args.record)
     use_wandb = bool(args.use_wandb)
     fine_tune = bool(args.fine_tune)
@@ -158,15 +135,12 @@ if __name__ == '__main__':
     model_name = args.model_name
     data_path_train = args.data_path_train
     data_path_val = args.data_path_val
-    num_iters_override = args.num_iters_override
     num_workers = int(args.num_workers)
     persistent_workers = bool(args.persistent_workers)
     prefetch_factor = int(args.prefetch_factor)
     sample_cache_size = int(args.sample_cache_size)
     val_check_interval = int(args.val_check_interval)
     log_every_n_steps = int(args.log_every_n_steps)
-    trainer_devices = int(args.devices)
-    trainer_strategy = args.strategy
     bs = args.batch_size
     ####################################################################################################################
     save_dir = f'{save_path}/{run_name}' if record else None
@@ -223,11 +197,6 @@ if __name__ == '__main__':
 
     # Always honor CLI batch size, including fresh train-from-scratch runs.
     cfg['batch_size'] = bs
-
-    if num_iters_override is not None:
-        if int(num_iters_override) < 1:
-            raise ValueError('--num_iters_override must be >= 1')
-        cfg['num_iters'] = int(num_iters_override)
     ####################################################################################################################
     loader_kwargs = {
         'num_workers': num_workers,
@@ -239,10 +208,6 @@ if __name__ == '__main__':
 
     val_count = len(glob(os.path.join(data_path_val, 'data_*.pt')))
     train_count = len(glob(os.path.join(data_path_train, 'data_*.pt')))
-    if debug_paths or val_count == 0:
-        _debug_dataset_path("val", data_path_val, "data_*.pt")
-    if debug_paths or train_count == 0:
-        _debug_dataset_path("train", data_path_train, "data_*.pt")
     if val_count == 0:
         raise RuntimeError(f"No data_*.pt files found in {data_path_val}")
     if train_count == 0:
@@ -283,8 +248,7 @@ if __name__ == '__main__':
     trainer = L.Trainer(
         enable_checkpointing=False,  # We save the models manually.
         accelerator=cfg['device'],
-        devices=trainer_devices,
-        strategy=trainer_strategy,
+        devices=1,
         max_steps=cfg['num_iters'],
         enable_progress_bar=True,
         precision='16-mixed',
