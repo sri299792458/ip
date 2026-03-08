@@ -15,7 +15,8 @@
 #SBATCH --output=ip_h100_stream_%j.out
 #SBATCH --error=ip_h100_stream_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
+trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2; exit "$rc"' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -67,7 +68,7 @@ resolve_existing_dir() {
   local path="$1"
   local label="$2"
   if [ ! -d "$path" ]; then
-    echo "ERROR: required directory not found for $label: $path"
+    echo "ERROR: required directory not found for $label: $path" >&2
     exit 1
   fi
   (cd "$path" && pwd -P)
@@ -77,13 +78,13 @@ resolve_existing_file() {
   local path="$1"
   local label="$2"
   if [ ! -f "$path" ]; then
-    echo "ERROR: required file not found for $label: $path"
+    echo "ERROR: required file not found for $label: $path" >&2
     exit 1
   fi
   local dir
   dir="$(dirname "$path")"
   if [ ! -d "$dir" ]; then
-    echo "ERROR: parent directory not found for $label: $dir"
+    echo "ERROR: parent directory not found for $label: $dir" >&2
     exit 1
   fi
   dir="$(cd "$dir" && pwd -P)"
@@ -96,11 +97,24 @@ resolve_path_with_existing_parent() {
   local dir
   dir="$(dirname "$path")"
   if [ ! -d "$dir" ]; then
-    echo "ERROR: parent directory not found for $label: $dir"
+    echo "ERROR: parent directory not found for $label: $dir" >&2
     exit 1
   fi
   dir="$(cd "$dir" && pwd -P)"
   printf "%s/%s\n" "$dir" "$(basename "$path")"
+}
+
+resolve_container_runtime() {
+  if command -v apptainer >/dev/null 2>&1; then
+    printf "apptainer\n"
+    return
+  fi
+  if command -v singularity >/dev/null 2>&1; then
+    printf "singularity\n"
+    return
+  fi
+  echo "ERROR: neither apptainer nor singularity is available in PATH" >&2
+  exit 1
 }
 
 PROJECT_DIR="$(resolve_existing_dir "$PROJECT_DIR" "PROJECT_DIR")"
@@ -119,6 +133,7 @@ SCENE_ENCODER_PATH="$(resolve_existing_file "$SCENE_ENCODER_PATH" "SCENE_ENCODER
 MESH_PATH="$(resolve_existing_file "$MESH_PATH" "MESH_PATH")"
 INDEX_PATH="$(resolve_path_with_existing_parent "$INDEX_PATH" "INDEX_PATH")"
 CONTAINER_IMAGE="$(resolve_existing_file "$CONTAINER_IMAGE" "CONTAINER_IMAGE")"
+CONTAINER_RUNTIME="$(resolve_container_runtime)"
 
 required_dirs=("$INSTANT_POLICY_DIR" "$STATIC_DATA_DIR" "$SHAPENET_PATH")
 if [ "$SKIP_VAL" != "1" ]; then
@@ -146,6 +161,7 @@ fi
 HOT_DATA_DIR="/scratch.local/$USER/ip_${RUN_NAME}_${SLURM_JOB_ID:-manual}"
 HOT_TRAIN_DIR="$HOT_DATA_DIR/train_ring"
 HOT_VAL_DIR="$HOT_DATA_DIR/val"
+HOT_SMOKE_DIR="$HOT_DATA_DIR/smoke"
 mkdir -p "$HOT_TRAIN_DIR" "$HOT_VAL_DIR"
 
 GEN_PID=""
@@ -219,7 +235,7 @@ to_container_path() {
 
 container_exec() {
   local cmd="$1"
-  apptainer exec --nv --cleanenv --no-home \
+  "$CONTAINER_RUNTIME" exec --nv --cleanenv --no-home \
     $NETRC_BIND \
     $EXTRA_BINDS \
     --bind "$INSTANT_POLICY_DIR:/workspace/instant_policy" \
@@ -251,6 +267,7 @@ HOT_VAL_CONTAINER_PATH=""
 if [ "$SKIP_VAL" != "1" ]; then
   HOT_VAL_CONTAINER_PATH="$(to_container_path "$HOT_VAL_DIR")"
 fi
+HOT_SMOKE_CONTAINER_PATH="$(to_container_path "$HOT_SMOKE_DIR")"
 
 HOST_RUN_DIR="$RUNS_ROOT/$RUN_NAME"
 mkdir -p "$HOST_RUN_DIR"
@@ -259,7 +276,7 @@ HOST_WANDB_ID_FILE="$HOST_RUN_DIR/wandb_id.txt"
 if [ -s "$HOST_WANDB_ID_FILE" ]; then
   WANDB_ID="$(tr -d ' \n\r\t' < "$HOST_WANDB_ID_FILE")"
 else
-  WANDB_ID="$(tr -dc 'a-z0-9' </dev/urandom | head -c 8)"
+  WANDB_ID="$(tr '[:upper:]' '[:lower:]' < /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-8)"
   printf "%s\n" "$WANDB_ID" > "$HOST_WANDB_ID_FILE"
 fi
 NUM_ITERS_OVERRIDE_ARG=""
@@ -320,6 +337,31 @@ echo "batch_size=$BATCH_SIZE num_workers=$TRAIN_NUM_WORKERS"
 echo "buffer_size=$TRAIN_BUFFER_SIZE start_min_items=$TRAIN_START_MIN_ITEMS"
 echo "save_every=$SAVE_EVERY"
 echo "hot_data_dir=$HOT_DATA_DIR"
+
+echo "Running generator smoke test..."
+mkdir -p "$HOT_SMOKE_DIR"
+find "$HOT_SMOKE_DIR" -maxdepth 1 -type f -name 'data_*.pt' -delete
+container_exec "
+  export PYOPENGL_PLATFORM=egl
+  python -m ip.scripts.generate_pseudo_demos \
+    --shapenet_path \"$SHAPENET_CONTAINER_PATH\" \
+    --shapenet_index_path \"$INDEX_CONTAINER_PATH\" \
+    --save_dir \"$HOT_SMOKE_CONTAINER_PATH\" \
+    --num_tasks 1 \
+    --task_start $((GEN_TASK_START - 1)) \
+    --seed $TRAIN_GEN_SEED \
+    --storage_format steps \
+    --pcd_storage_dtype $PCD_DTYPE \
+    --num_demos_per_task $NUM_DEMOS_PER_TASK $NUM_DEMOS_PER_TASK \
+    --gripper_mesh_path \"$MESH_CONTAINER_PATH\"
+"
+SMOKE_COUNT="$(find "$HOT_SMOKE_DIR" -maxdepth 1 -type f -name 'data_*.pt' | wc -l | tr -d ' ')"
+if [ "$SMOKE_COUNT" -lt 1 ]; then
+  echo "ERROR: generator smoke test produced no data files in $HOT_SMOKE_DIR" >&2
+  exit 1
+fi
+find "$HOT_SMOKE_DIR" -maxdepth 1 -type f -name 'data_*.pt' -delete
+echo "Generator smoke test passed."
 
 container_exec "bash /workspace/hot/$(basename "$GEN_SCRIPT")" > "$LOG_ROOT/ip_gen_${RUN_NAME}_${SLURM_JOB_ID:-manual}.log" 2>&1 &
 GEN_PID="$!"

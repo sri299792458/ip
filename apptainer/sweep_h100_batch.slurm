@@ -16,7 +16,8 @@
 #SBATCH --output=ip_h100_sweep_%j.out
 #SBATCH --error=ip_h100_sweep_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
+trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2; exit "$rc"' ERR
 
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
 PROBE_SCRIPT="${PROBE_SCRIPT:-$SUBMIT_DIR/train_h100_streaming.slurm}"
