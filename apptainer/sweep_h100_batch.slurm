@@ -13,13 +13,13 @@
 #SBATCH --tmp=300G
 #SBATCH -t 06:00:00
 #SBATCH --job-name=ip_h100_sweep
-#SBATCH --output=/scratch.global/%u/ips/logs/ip_h100_sweep_%j.out
-#SBATCH --error=/scratch.global/%u/ips/logs/ip_h100_sweep_%j.err
+#SBATCH --output=ip_h100_sweep_%j.out
+#SBATCH --error=ip_h100_sweep_%j.err
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-PROBE_SCRIPT="${PROBE_SCRIPT:-$SCRIPT_DIR/train_h100_streaming.slurm}"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
+PROBE_SCRIPT="${PROBE_SCRIPT:-$SUBMIT_DIR/train_h100_streaming.slurm}"
 
 BATCH_SIZES=(${BATCH_SIZES:-16 24 32 48})
 PROBE_STEPS="${PROBE_STEPS:-2000}"

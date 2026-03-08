@@ -12,8 +12,8 @@
 #SBATCH --tmp=300G
 #SBATCH -t 24:00:00
 #SBATCH --job-name=ip_h100_stream
-#SBATCH --output=/scratch.global/%u/ips/logs/ip_h100_stream_%j.out
-#SBATCH --error=/scratch.global/%u/ips/logs/ip_h100_stream_%j.err
+#SBATCH --output=ip_h100_stream_%j.out
+#SBATCH --error=ip_h100_stream_%j.err
 
 set -euo pipefail
 
