@@ -50,6 +50,7 @@ for batch_size in "${BATCH_SIZES[@]}"; do
   TRAIN_NUM_WORKERS="$TRAIN_NUM_WORKERS" \
   TRAIN_BUFFER_SIZE="$train_buffer_size" \
   SAVE_EVERY="$save_every" \
+  SKIP_VAL=1 \
   NUM_ITERS_OVERRIDE="$PROBE_STEPS" \
   bash "$PROBE_SCRIPT"
 done

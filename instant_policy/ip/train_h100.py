@@ -225,7 +225,7 @@ def _build_parser():
     parser = argparse.ArgumentParser(description="Minimal streaming H100 training entrypoint for Instant Policy.")
     parser.add_argument("--run_name", type=str, required=True)
     parser.add_argument("--train_dir", type=str, required=True)
-    parser.add_argument("--val_dir", type=str, required=True)
+    parser.add_argument("--val_dir", type=str, default=None)
     parser.add_argument("--save_root", type=str, required=True)
     parser.add_argument("--scene_encoder_path", type=str, required=True)
     parser.add_argument("--batch_size", type=int, default=32)
@@ -278,18 +278,26 @@ def main():
     min_train_items = _derived_min_train_items(args.batch_size)
     model = H100GraphDiffusion(cfg).to(cfg["device"])
 
-    val_count = len(glob(os.path.join(args.val_dir, "data_*.pt")))
     train_count = len(glob(os.path.join(args.train_dir, "data_*.pt")))
+    use_val = bool(args.val_dir)
+    val_count = 0
     if train_count == 0:
         raise RuntimeError(f"No data_*.pt files found in {args.train_dir}")
-    if val_count == 0:
-        raise RuntimeError(f"No data_*.pt files found in {args.val_dir}")
+    if use_val:
+        val_count = len(glob(os.path.join(args.val_dir, "data_*.pt")))
+        if val_count == 0:
+            raise RuntimeError(f"No data_*.pt files found in {args.val_dir}")
 
-    print(
-        f"[TRAIN_CONFIG] train_items={train_count} val_items={val_count} "
+    config_summary = (
+        f"[TRAIN_CONFIG] train_items={train_count} "
         f"batch_size={cfg['batch_size']} num_iters={cfg['num_iters']} "
         f"precision={PRECISION} min_train_items={min_train_items}"
     )
+    if use_val:
+        config_summary += f" val_items={val_count}"
+    else:
+        config_summary += " validation=disabled"
+    print(config_summary)
     print(
         f"[TRAIN_CONFIG] lr={cfg['lr']} weight_decay={cfg['weight_decay']} "
         f"save_every={cfg['save_every']} num_workers={args.num_workers}"
@@ -315,16 +323,18 @@ def main():
         **loader_kwargs,
     )
 
-    val_loader_kwargs = {
-        "num_workers": min(4, int(args.num_workers)),
-        "pin_memory": True,
-    }
-    if val_loader_kwargs["num_workers"] > 0:
-        val_loader_kwargs["persistent_workers"] = True
-        val_loader_kwargs["prefetch_factor"] = PREFETCH_FACTOR
+    dataloader_val = None
+    if use_val:
+        val_loader_kwargs = {
+            "num_workers": min(4, int(args.num_workers)),
+            "pin_memory": True,
+        }
+        if val_loader_kwargs["num_workers"] > 0:
+            val_loader_kwargs["persistent_workers"] = True
+            val_loader_kwargs["prefetch_factor"] = PREFETCH_FACTOR
 
-    dset_val = RunningDataset(args.val_dir, val_count, rand_g_prob=0, sample_cache_size=0)
-    dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False, **val_loader_kwargs)
+        dset_val = RunningDataset(args.val_dir, val_count, rand_g_prob=0, sample_cache_size=0)
+        dataloader_val = DataLoader(dset_val, batch_size=1, shuffle=False, **val_loader_kwargs)
 
     wandb_kwargs = {
         "project": "Instant Policy",
@@ -351,7 +361,8 @@ def main():
         enable_progress_bar=True,
         benchmark=True,
         precision=PRECISION,
-        val_check_interval=min(int(args.save_every), cfg["num_iters"]),
+        val_check_interval=min(int(args.save_every), cfg["num_iters"]) if use_val else None,
+        limit_val_batches=1.0 if use_val else 0,
         num_sanity_val_steps=0,
         check_val_every_n_epoch=None,
         logger=logger,
@@ -365,12 +376,14 @@ def main():
     if resume_ckpt_path is not None:
         fit_ckpt_path = _align_checkpoint_state_dict_for_model(resume_ckpt_path, model)
 
-    trainer.fit(
-        model=model,
-        train_dataloaders=dataloader_train,
-        val_dataloaders=dataloader_val,
-        ckpt_path=fit_ckpt_path,
-    )
+    fit_kwargs = {
+        "model": model,
+        "train_dataloaders": dataloader_train,
+        "ckpt_path": fit_ckpt_path,
+    }
+    if use_val:
+        fit_kwargs["val_dataloaders"] = dataloader_val
+    trainer.fit(**fit_kwargs)
 
 
 if __name__ == "__main__":

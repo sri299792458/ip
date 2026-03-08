@@ -39,6 +39,7 @@ TRAIN_NUM_WORKERS="${TRAIN_NUM_WORKERS:-16}"
 TRAIN_BUFFER_SIZE="${TRAIN_BUFFER_SIZE:-$((256 * BATCH_SIZE))}"
 SAVE_EVERY="${SAVE_EVERY:-50000}"
 NUM_ITERS_OVERRIDE="${NUM_ITERS_OVERRIDE:-}"
+SKIP_VAL="${SKIP_VAL:-0}"
 
 NUM_DEMOS_PER_TASK=3
 GEN_CHUNK_TASKS=128
@@ -62,19 +63,68 @@ if [ ! -d /scratch.local ]; then
   exit 1
 fi
 
-PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)"
-INSTANT_POLICY_DIR="$(cd "$INSTANT_POLICY_DIR" && pwd -P)"
-STATIC_DATA_DIR="$(mkdir -p "$STATIC_DATA_DIR" && cd "$STATIC_DATA_DIR" && pwd -P)"
-VAL_SHARED_DIR="$(cd "$VAL_SHARED_DIR" && pwd -P)"
-RUNS_ROOT="$(mkdir -p "$RUNS_ROOT" && cd "$RUNS_ROOT" && pwd -P)"
-LOG_ROOT="$(mkdir -p "$LOG_ROOT" && cd "$LOG_ROOT" && pwd -P)"
-SHAPENET_PATH="$(cd "$SHAPENET_PATH" && pwd -P)"
-SCENE_ENCODER_PATH="$(cd "$(dirname "$SCENE_ENCODER_PATH")" && pwd -P)/$(basename "$SCENE_ENCODER_PATH")"
-MESH_PATH="$(cd "$(dirname "$MESH_PATH")" && pwd -P)/$(basename "$MESH_PATH")"
-INDEX_PATH="$(cd "$(dirname "$INDEX_PATH")" && pwd -P)/$(basename "$INDEX_PATH")"
-CONTAINER_IMAGE="$(cd "$(dirname "$CONTAINER_IMAGE")" && pwd -P)/$(basename "$CONTAINER_IMAGE")"
+resolve_existing_dir() {
+  local path="$1"
+  local label="$2"
+  if [ ! -d "$path" ]; then
+    echo "ERROR: required directory not found for $label: $path"
+    exit 1
+  fi
+  (cd "$path" && pwd -P)
+}
 
-for path in "$INSTANT_POLICY_DIR" "$STATIC_DATA_DIR" "$SHAPENET_PATH" "$VAL_SHARED_DIR"; do
+resolve_existing_file() {
+  local path="$1"
+  local label="$2"
+  if [ ! -f "$path" ]; then
+    echo "ERROR: required file not found for $label: $path"
+    exit 1
+  fi
+  local dir
+  dir="$(dirname "$path")"
+  if [ ! -d "$dir" ]; then
+    echo "ERROR: parent directory not found for $label: $dir"
+    exit 1
+  fi
+  dir="$(cd "$dir" && pwd -P)"
+  printf "%s/%s\n" "$dir" "$(basename "$path")"
+}
+
+resolve_path_with_existing_parent() {
+  local path="$1"
+  local label="$2"
+  local dir
+  dir="$(dirname "$path")"
+  if [ ! -d "$dir" ]; then
+    echo "ERROR: parent directory not found for $label: $dir"
+    exit 1
+  fi
+  dir="$(cd "$dir" && pwd -P)"
+  printf "%s/%s\n" "$dir" "$(basename "$path")"
+}
+
+PROJECT_DIR="$(resolve_existing_dir "$PROJECT_DIR" "PROJECT_DIR")"
+INSTANT_POLICY_DIR="$(resolve_existing_dir "$INSTANT_POLICY_DIR" "INSTANT_POLICY_DIR")"
+mkdir -p "$STATIC_DATA_DIR"
+STATIC_DATA_DIR="$(resolve_existing_dir "$STATIC_DATA_DIR" "STATIC_DATA_DIR")"
+if [ "$SKIP_VAL" != "1" ]; then
+  VAL_SHARED_DIR="$(resolve_existing_dir "$VAL_SHARED_DIR" "VAL_SHARED_DIR")"
+fi
+mkdir -p "$RUNS_ROOT"
+RUNS_ROOT="$(resolve_existing_dir "$RUNS_ROOT" "RUNS_ROOT")"
+mkdir -p "$LOG_ROOT"
+LOG_ROOT="$(resolve_existing_dir "$LOG_ROOT" "LOG_ROOT")"
+SHAPENET_PATH="$(resolve_existing_dir "$SHAPENET_PATH" "SHAPENET_PATH")"
+SCENE_ENCODER_PATH="$(resolve_existing_file "$SCENE_ENCODER_PATH" "SCENE_ENCODER_PATH")"
+MESH_PATH="$(resolve_existing_file "$MESH_PATH" "MESH_PATH")"
+INDEX_PATH="$(resolve_path_with_existing_parent "$INDEX_PATH" "INDEX_PATH")"
+CONTAINER_IMAGE="$(resolve_existing_file "$CONTAINER_IMAGE" "CONTAINER_IMAGE")"
+
+required_dirs=("$INSTANT_POLICY_DIR" "$STATIC_DATA_DIR" "$SHAPENET_PATH")
+if [ "$SKIP_VAL" != "1" ]; then
+  required_dirs+=("$VAL_SHARED_DIR")
+fi
+for path in "${required_dirs[@]}"; do
   if [ ! -d "$path" ]; then
     echo "ERROR: required directory not found: $path"
     exit 1
@@ -86,9 +136,11 @@ for path in "$CONTAINER_IMAGE" "$SCENE_ENCODER_PATH" "$MESH_PATH"; do
     exit 1
   fi
 done
-if ! find "$VAL_SHARED_DIR" -maxdepth 1 -type f -name 'data_*.pt' | grep -q .; then
-  echo "ERROR: validation directory is empty: $VAL_SHARED_DIR"
-  exit 1
+if [ "$SKIP_VAL" != "1" ]; then
+  if ! find "$VAL_SHARED_DIR" -maxdepth 1 -type f -name 'data_*.pt' | grep -q .; then
+    echo "ERROR: validation directory is empty: $VAL_SHARED_DIR"
+    exit 1
+  fi
 fi
 
 HOT_DATA_DIR="/scratch.local/$USER/ip_${RUN_NAME}_${SLURM_JOB_ID:-manual}"
@@ -106,11 +158,13 @@ cleanup_all() {
 }
 trap cleanup_all EXIT INT TERM
 
-if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete "$VAL_SHARED_DIR"/ "$HOT_VAL_DIR"/
-else
-  find "$HOT_VAL_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  cp -a "$VAL_SHARED_DIR"/. "$HOT_VAL_DIR"/
+if [ "$SKIP_VAL" != "1" ]; then
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$VAL_SHARED_DIR"/ "$HOT_VAL_DIR"/
+  else
+    find "$HOT_VAL_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    cp -a "$VAL_SHARED_DIR"/. "$HOT_VAL_DIR"/
+  fi
 fi
 find "$HOT_TRAIN_DIR" -maxdepth 1 -type f -name 'data_*.pt' -delete
 
@@ -193,7 +247,10 @@ SCENE_ENCODER_CONTAINER_PATH="$(to_container_path "$SCENE_ENCODER_PATH")"
 MESH_CONTAINER_PATH="$(to_container_path "$MESH_PATH")"
 RUNS_ROOT_CONTAINER_PATH="$(to_container_path "$RUNS_ROOT")"
 HOT_TRAIN_CONTAINER_PATH="$(to_container_path "$HOT_TRAIN_DIR")"
-HOT_VAL_CONTAINER_PATH="$(to_container_path "$HOT_VAL_DIR")"
+HOT_VAL_CONTAINER_PATH=""
+if [ "$SKIP_VAL" != "1" ]; then
+  HOT_VAL_CONTAINER_PATH="$(to_container_path "$HOT_VAL_DIR")"
+fi
 
 HOST_RUN_DIR="$RUNS_ROOT/$RUN_NAME"
 mkdir -p "$HOST_RUN_DIR"
@@ -208,6 +265,10 @@ fi
 NUM_ITERS_OVERRIDE_ARG=""
 if [ -n "$NUM_ITERS_OVERRIDE" ]; then
   NUM_ITERS_OVERRIDE_ARG="--num_iters_override $NUM_ITERS_OVERRIDE"
+fi
+VAL_ARG=""
+if [ "$SKIP_VAL" != "1" ]; then
+  VAL_ARG="--val_dir \"$HOT_VAL_CONTAINER_PATH\""
 fi
 
 GEN_SCRIPT="$HOT_DATA_DIR/generate_stream.sh"
@@ -242,13 +303,13 @@ set -euo pipefail
 python /workspace/instant_policy/ip/train_h100.py \\
   --run_name "$RUN_NAME" \\
   --train_dir "$HOT_TRAIN_CONTAINER_PATH" \\
-  --val_dir "$HOT_VAL_CONTAINER_PATH" \\
   --save_root "$RUNS_ROOT_CONTAINER_PATH" \\
   --scene_encoder_path "$SCENE_ENCODER_CONTAINER_PATH" \\
   --batch_size $BATCH_SIZE \\
   --num_workers $TRAIN_NUM_WORKERS \\
   --save_every $SAVE_EVERY \\
   --wandb_id "$WANDB_ID" \\
+  $VAL_ARG \\
   $NUM_ITERS_OVERRIDE_ARG
 EOF
 chmod +x "$TRAIN_SCRIPT"
