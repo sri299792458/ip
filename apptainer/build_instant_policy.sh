@@ -71,6 +71,39 @@ apptainer build --fakeroot --force "$OUTPUT_DIR/instant_policy.sif" "$DEF_FILE"
 ln -sf "$OUTPUT_DIR/instant_policy.sif" "$SCRIPT_DIR/instant_policy.sif"
 
 echo ""
+echo "Running post-build self-check..."
+apptainer exec --cleanenv --no-home \
+  --bind "$REPO_ROOT/instant_policy:/workspace/instant_policy" \
+  --pwd /workspace/instant_policy/ip \
+  "$OUTPUT_DIR/instant_policy.sif" \
+  bash -lc '
+    export PATH=/opt/miniforge/envs/ip/bin:/opt/miniforge/bin:$PATH
+    export PYTHONPATH=/workspace/instant_policy:$PYTHONPATH
+    export PYOPENGL_PLATFORM=egl
+    python - <<'"'"'PY'"'"'
+import ctypes
+
+ctypes.CDLL("libGLU.so.1")
+ctypes.CDLL("libEGL.so.1")
+
+import imageio
+import OpenGL
+import pyglet
+import pyrender
+import trimesh
+from ip.generation.pseudo_demo_generator import PseudoDemoGenerator
+
+print("SELF_CHECK_OK")
+print("OpenGL", OpenGL.__version__)
+print("pyglet", pyglet.version)
+print("pyrender", pyrender.__version__)
+print("trimesh", trimesh.__version__)
+print("imageio", imageio.__version__)
+print("PseudoDemoGenerator", PseudoDemoGenerator.__name__)
+PY
+  '
+
+echo ""
 echo "================================"
 echo "Build completed successfully!"
 echo "================================"

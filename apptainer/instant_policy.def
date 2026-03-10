@@ -22,7 +22,7 @@ From: nvidia/cuda:12.1.1-devel-ubuntu20.04
     apt-get update && apt-get install -y \
         wget curl git unzip \
         xvfb x11vnc fluxbox \
-        libgl1-mesa-glx libgl1-mesa-dri libglu1-mesa \
+        libgl1-mesa-glx libgl1-mesa-dri libglu1-mesa libegl1 libegl-mesa0 libopengl0 libglvnd0 libglx0 \
         libxcb-xinerama0 libxkbcommon-x11-0 \
         libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
         libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
