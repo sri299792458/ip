@@ -21,10 +21,6 @@ echo "Instant Policy Container Builder"
 echo "================================"
 echo ""
 
-# Load CUDA module (required for GPU support during build)
-echo "Loading CUDA 11.8 module..."
-module load cuda/11.8.0-gcc-7.2.0-xqzqlf2
-
 # Set up Apptainer cache directories
 # Use scratch.global to avoid filling up home directory quota
 if [ -d "/scratch.global/$USER" ]; then
