@@ -18,12 +18,10 @@
 set -Eeuo pipefail
 trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2; exit "$rc"' ERR
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-
-PROJECT_DIR="${PROJECT_DIR:-$REPO_ROOT}"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$SUBMIT_DIR/.." && pwd -P)}"
 INSTANT_POLICY_DIR="${INSTANT_POLICY_DIR:-$PROJECT_DIR/instant_policy}"
-CONTAINER_IMAGE="${CONTAINER_IMAGE:-$SCRIPT_DIR/instant_policy.sif}"
+CONTAINER_IMAGE="${CONTAINER_IMAGE:-$SUBMIT_DIR/instant_policy.sif}"
 
 STATIC_DATA_DIR="${STATIC_DATA_DIR:-/scratch.global/$USER/ips}"
 SHAPENET_PATH="${SHAPENET_PATH:-$STATIC_DATA_DIR/shapenet}"

@@ -2711,3 +2711,39 @@ root: Data = Data(pos_demos=[40960, 3], graps_demos=[1, 2, 10, 1], batch_demos=[
 - It preserves the H100 BF16 speedup for the rest of the model.
 - It avoids backing off to FP16 or FP32 globally.
 - No container rebuild is required for this fix because `instant_policy` is bind-mounted into the container at runtime.
+
+## H100 Streaming Sweep Result (2026-03-11)
+
+### Measured Throughput
+- Streaming one-GPU trainer+generator sweep results:
+  - `batch_size=16` -> `Train_SamplesPerSec ~= 80`
+  - `batch_size=32` -> `Train_SamplesPerSec ~= 60`
+  - `batch_size=48` -> `Train_SamplesPerSec ~= 40`
+
+### Conclusion
+- On the current one-GPU streaming pipeline, increasing batch size on H100 makes end-to-end throughput worse.
+- So H100 memory headroom is not the useful lever here.
+- The measured bottleneck is likely shared-GPU generation / data-pipeline contention, not raw trainer math throughput.
+
+### Practical Decision
+- Use `batch_size=16` for the current streaming path.
+- Do not assume larger H100 batches reduce wallclock for this codebase.
+
+## Trainer-Only H100 Probe (2026-03-11)
+
+### Why
+- The streaming sweep measures end-to-end throughput with generator and trainer sharing the same H100.
+- That does not isolate raw trainer speed.
+
+### Added
+- [probe_h100_train_only.slurm](/home/srinivas/Desktop/ip/apptainer/probe_h100_train_only.slurm)
+  - pre-fills a local dataset on `/scratch.local`
+  - stops generation completely
+  - runs `train_h100.py` on the static local dataset to measure trainer-only throughput
+
+### Slurm Path Bug
+- New Slurm scripts must not derive repo paths from `BASH_SOURCE[0]`.
+- Under `sbatch`, the script may execute from `/var/spool/slurmd/...`, which breaks repo-relative defaults.
+- Fix: anchor defaults from `SLURM_SUBMIT_DIR` instead.
+- This was applied to `probe_h100_train_only.slurm`.
+- Same fix was also applied to `train_h100_streaming.slurm` so direct `sbatch train_h100_streaming.slurm` does not regress to the spool-path failure.
