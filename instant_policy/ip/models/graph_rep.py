@@ -259,100 +259,101 @@ class GraphRep(nn.Module):
         self.graph[('gripper', 'rel_cond', 'gripper')].edge_index = dense_g_g[:, g_tc_g]
 
     def update_graph(self, data):
-        # Adding information to the graph structure create in initialise_graph.
-        # scene_node_pos: # [B, N, T, S, 3]
-        gripper_node_pos = self.gripper_node_pos[None, None, None, :, :].repeat(self.batch_size,
-                                                                                self.num_demos,
-                                                                                self.traj_horizon, 1, 1)
-        ################################################################################################################
-        # demo_T_w_es: [B, D, T, 4, 4]
-        # T_w_e: [B, 4, 4]
-        # T_w_n: [B, P, 4, 4]
-        # Create identity matrix like T_w_e
-        I_w_e = torch.eye(4, device=self.device)[None, :, :].repeat(self.batch_size, 1, 1)
+        # Graph construction uses matrix inverse and positional geometry math.
+        # Keep it in fp32 to avoid bf16 backend gaps in the training path.
+        with torch.autocast(device_type=self.device, enabled=False):
+            # Adding information to the graph structure create in initialise_graph.
+            # scene_node_pos: # [B, N, T, S, 3]
+            gripper_node_pos = self.gripper_node_pos[None, None, None, :, :].repeat(self.batch_size,
+                                                                                    self.num_demos,
+                                                                                    self.traj_horizon, 1, 1)
+            ################################################################################################################
+            # demo_T_w_es: [B, D, T, 4, 4]
+            # T_w_e: [B, 4, 4]
+            # T_w_n: [B, P, 4, 4]
+            # Create identity matrix like T_w_e
+            I_w_e = torch.eye(4, device=self.device)[None, :, :].repeat(self.batch_size, 1, 1)
 
-        all_T_w_e = torch.cat([
-            data.demo_T_w_es[:, :self.num_demos, :, None, :, :].repeat(1, 1, 1, 6, 1, 1).view(-1, 4, 4),
-            I_w_e[:, None, :, :].repeat(1, 6, 1, 1).view(-1, 4, 4),
-            data.actions[:, :, None, :, :].repeat(1, 1, 6, 1, 1).view(-1, 4, 4)
-        ])
-        all_T_e_w = all_T_w_e.inverse()
-        ################################################################################################################
+            all_T_w_e = torch.cat([
+                data.demo_T_w_es[:, :self.num_demos, :, None, :, :].float().repeat(1, 1, 1, 6, 1, 1).view(-1, 4, 4),
+                I_w_e[:, None, :, :].repeat(1, 6, 1, 1).view(-1, 4, 4),
+                data.actions[:, :, None, :, :].float().repeat(1, 1, 6, 1, 1).view(-1, 4, 4)
+            ])
+            all_T_e_w = all_T_w_e.inverse()
+            ################################################################################################################
 
-        gripper_node_pos_current = gripper_node_pos[:, 0, 0, ...].view(self.batch_size, -1, 3)
-        gripper_node_pos_action = self.gripper_node_pos[None, None, :, :].repeat(self.batch_size,
-                                                                                 self.pred_horizon, 1, 1)
+            gripper_node_pos_current = gripper_node_pos[:, 0, 0, ...].view(self.batch_size, -1, 3)
+            gripper_node_pos_action = self.gripper_node_pos[None, None, :, :].repeat(self.batch_size,
+                                                                                     self.pred_horizon, 1, 1)
 
-        gripper_node_pos = torch.cat([gripper_node_pos.reshape(-1, 3),
-                                      gripper_node_pos_current.reshape(-1, 3),
-                                      gripper_node_pos_action.reshape(-1, 3)], dim=0)
+            gripper_node_pos = torch.cat([gripper_node_pos.reshape(-1, 3),
+                                          gripper_node_pos_current.reshape(-1, 3),
+                                          gripper_node_pos_action.reshape(-1, 3)], dim=0)
 
-        # data.graps_demos [B, D, T, 1]
-        gripper_states = self.gripper_proj(data.graps_demos[:, :self.num_demos])[..., None, :].repeat(1, 1, 1,
-                                                                                                      self.num_g_nodes,
-                                                                                                      1)
-        gripper_states = gripper_states.view(-1, self.g_state_dim)
-        gripper_states_current = self.gripper_proj(data.current_grip.unsqueeze(-1))[..., None, :].repeat(1,
-                                                                                                         self.num_g_nodes,
-                                                                                                         1)
-        gripper_states_current = gripper_states_current.view(-1, self.g_state_dim)
-        gripper_states_action = self.gripper_proj(data.actions_grip.unsqueeze(-1))[..., None, :].repeat(1, 1,
-                                                                                                        self.num_g_nodes,
-                                                                                                        1)
-        gripper_states_action = gripper_states_action.view(-1, self.g_state_dim)
-        gripper_states = torch.cat([gripper_states, gripper_states_current, gripper_states_action], dim=0)
-        gripper_embd = self.gripper_embds(self.graph.gripper_embd)
+            # data.graps_demos [B, D, T, 1]
+            gripper_states = self.gripper_proj(data.graps_demos[:, :self.num_demos].float())[..., None, :].repeat(
+                1, 1, 1, self.num_g_nodes, 1)
+            gripper_states = gripper_states.view(-1, self.g_state_dim)
+            gripper_states_current = self.gripper_proj(data.current_grip.unsqueeze(-1).float())[..., None, :].repeat(
+                1, self.num_g_nodes, 1)
+            gripper_states_current = gripper_states_current.view(-1, self.g_state_dim)
+            gripper_states_action = self.gripper_proj(data.actions_grip.unsqueeze(-1).float())[..., None, :].repeat(
+                1, 1, self.num_g_nodes, 1)
+            gripper_states_action = gripper_states_action.view(-1, self.g_state_dim)
+            gripper_states = torch.cat([gripper_states, gripper_states_current, gripper_states_action], dim=0)
+            gripper_embd = self.gripper_embds(self.graph.gripper_embd).float()
 
-        # Adding diffusion time step information to gripper action nodes.
-        d_time_embd = self.sine_pos_embd(data.diff_time)[:, None, ...].repeat(1,
-                                                                              self.pred_horizon,
-                                                                              self.num_g_nodes,
-                                                                              1).view(-1, self.d_time_dim)
-        gripper_embd[self.graph.gripper_time > self.traj_horizon][:, -self.d_time_dim:] = d_time_embd
+            # Adding diffusion time step information to gripper action nodes.
+            d_time_embd = self.sine_pos_embd(data.diff_time.float())[:, None, ...].repeat(1,
+                                                                                          self.pred_horizon,
+                                                                                          self.num_g_nodes,
+                                                                                          1).view(-1, self.d_time_dim)
+            gripper_embd[self.graph.gripper_time > self.traj_horizon][:, -self.d_time_dim:] = d_time_embd
 
-        gripper_embd = torch.cat([gripper_embd, gripper_states], dim=-1)
+            gripper_embd = torch.cat([gripper_embd, gripper_states], dim=-1)
 
-        scene_node_pos = torch.cat([
-            data.demo_scene_node_pos[:, :self.num_demos].reshape(-1, 3),
-            data.live_scene_node_pos.view(-1, 3),
-            data.action_scene_node_pos.view(-1, 3)
-        ], dim=0)
-        scene_node_embd = torch.cat([
-            data.demo_scene_node_embds[:, :self.num_demos].reshape(-1, self.embd_dim),
-            data.live_scene_node_embds.view(-1, self.embd_dim),
-            data.action_scene_node_embds.view(-1, self.embd_dim)
-        ], dim=0)
+            scene_node_pos = torch.cat([
+                data.demo_scene_node_pos[:, :self.num_demos].reshape(-1, 3).float(),
+                data.live_scene_node_pos.view(-1, 3).float(),
+                data.action_scene_node_pos.view(-1, 3).float()
+            ], dim=0)
+            scene_node_embd = torch.cat([
+                data.demo_scene_node_embds[:, :self.num_demos].reshape(-1, self.embd_dim).float(),
+                data.live_scene_node_embds.view(-1, self.embd_dim).float(),
+                data.action_scene_node_embds.view(-1, self.embd_dim).float()
+            ], dim=0)
 
-        self.graph['gripper'].pos = gripper_node_pos
-        self.graph['gripper'].x = gripper_embd
-        self.graph['scene'].pos = scene_node_pos
-        self.graph['scene'].x = scene_node_embd
+            self.graph['gripper'].pos = gripper_node_pos
+            self.graph['gripper'].x = gripper_embd
+            self.graph['scene'].pos = scene_node_pos
+            self.graph['scene'].x = scene_node_embd
 
-        if self.pos_in_nodes:
-            self.graph['gripper'].x = \
-                torch.cat([self.graph['gripper'].x, self.pos_embd(self.graph['gripper'].pos)], dim=-1)
-            self.graph['scene'].x = \
-                torch.cat([self.graph['scene'].x, self.pos_embd(self.graph['scene'].pos)], dim=-1)
+            if self.pos_in_nodes:
+                self.graph['gripper'].x = \
+                    torch.cat([self.graph['gripper'].x, self.pos_embd(self.graph['gripper'].pos)], dim=-1)
+                self.graph['scene'].x = \
+                    torch.cat([self.graph['scene'].x, self.pos_embd(self.graph['scene'].pos)], dim=-1)
 
-        self.add_rel_edge_attr('scene', 'gripper')
-        self.add_rel_edge_attr('gripper', 'gripper')
-        self.add_rel_edge_attr('scene', 'scene')
+            self.add_rel_edge_attr('scene', 'gripper')
+            self.add_rel_edge_attr('gripper', 'gripper')
+            self.add_rel_edge_attr('scene', 'scene')
 
-        self.graph[('gripper', 'cond', 'gripper')].edge_attr = self.gripper_cond_gripper_embds(
-            torch.zeros(len(self.graph[('gripper', 'cond', 'gripper')].edge_index[0]), device=self.device).long())
+            self.graph[('gripper', 'cond', 'gripper')].edge_attr = self.gripper_cond_gripper_embds(
+                torch.zeros(len(self.graph[('gripper', 'cond', 'gripper')].edge_index[0]), device=self.device).long()
+            ).float()
 
-        self.add_rel_edge_attr('scene', 'gripper', edge='rel_action')
-        self.add_rel_edge_attr('scene', 'gripper', edge='rel_demo')
+            self.add_rel_edge_attr('scene', 'gripper', edge='rel_action')
+            self.add_rel_edge_attr('scene', 'gripper', edge='rel_demo')
 
-        self.add_rel_edge_attr('scene', 'scene', edge='rel_demo')
-        self.add_rel_edge_attr('scene', 'scene', edge='rel_action')
+            self.add_rel_edge_attr('scene', 'scene', edge='rel_demo')
+            self.add_rel_edge_attr('scene', 'scene', edge='rel_action')
 
-        self.add_rel_edge_attr('gripper', 'gripper', edge='time_action',
-                               all_T_w_e=all_T_w_e, all_T_e_w=all_T_e_w)
-        self.add_rel_edge_attr('gripper', 'gripper', edge='rel_cond',
-                               all_T_w_e=all_T_w_e, all_T_e_w=all_T_e_w)
-        self.add_rel_edge_attr('gripper', 'gripper', edge='demo',
-                               all_T_w_e=all_T_w_e, all_T_e_w=all_T_e_w)
+            self.add_rel_edge_attr('gripper', 'gripper', edge='time_action',
+                                   all_T_w_e=all_T_w_e, all_T_e_w=all_T_e_w)
+            self.add_rel_edge_attr('gripper', 'gripper', edge='rel_cond',
+                                   all_T_w_e=all_T_w_e, all_T_e_w=all_T_e_w)
+            self.add_rel_edge_attr('gripper', 'gripper', edge='demo',
+                                   all_T_w_e=all_T_w_e, all_T_e_w=all_T_e_w)
 
     def add_rel_edge_attr(self, source, dest, edge='rel', all_T_w_e=None, all_T_e_w=None):
         if all_T_w_e is None:

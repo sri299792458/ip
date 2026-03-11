@@ -2675,3 +2675,39 @@ root: Data = Data(pos_demos=[40960, 3], graps_demos=[1, 2, 10, 1], batch_demos=[
 ### Why
 - OSMesa backend is unavailable in the current container (missing `libOSMesa`), so the software path is not usable.
 - Keeping dead toggles caused repeated confusion and wasted runs.
+
+## H100 BF16 Training Fix (2026-03-10)
+
+### Failure
+- H100 sweep got through generator startup and trainer init, then failed on the first training step with:
+  - `RuntimeError: "_" not implemented for 'BFloat16'`
+- The traceback ended in:
+  - `torch_cluster.fps(...)`
+  - [scene_encoder.py](/home/srinivas/Desktop/ip/instant_policy/ip/models/scene_encoder.py#L93)
+
+### Root Cause
+- Global Lightning precision was set to `bf16-mixed` in the H100 path.
+- BF16 autocast reached the scene-encoder path.
+- `torch_cluster.fps` does not support BF16 inputs, so the failure was not a general AMP problem; it was specific to the point-cloud sampling op inside the scene encoder.
+
+### Fix
+- Keep global BF16 training enabled.
+- Force only the scene-encoder path to run in FP32.
+- Implemented in [model.py](/home/srinivas/Desktop/ip/instant_policy/ip/models/model.py#L248):
+  - `get_demo_scene_emb(...)` and `get_live_scene_emb(...)` now call `_scene_encoder_forward(...)`
+  - `_scene_encoder_forward(...)` disables autocast and casts `pos` to `float32` before calling `self.scene_encoder(...)`
+
+### Follow-up Audit
+- After fixing `torch_cluster.fps`, the remaining obvious BF16-sensitive ops in the training path were checked.
+- Two more transform/geometry sections were moved to FP32:
+  - [model.py](/home/srinivas/Desktop/ip/instant_policy/ip/models/model.py#L115) `get_labels(...)`
+    - uses `torch.inverse(...)` on action transforms
+  - [graph_rep.py](/home/srinivas/Desktop/ip/instant_policy/ip/models/graph_rep.py#L261) `update_graph(...)`
+    - builds transform chains with `all_T_w_e.inverse()`
+    - constructs positional edge attributes from those transforms
+- These are now explicitly run with autocast disabled and float32 inputs so the H100 BF16 path keeps working around unsupported/fragile geometry kernels without turning BF16 off globally.
+
+### Why This Is The Right Scope
+- It preserves the H100 BF16 speedup for the rest of the model.
+- It avoids backing off to FP16 or FP32 globally.
+- No container rebuild is required for this fix because `instant_policy` is bind-mounted into the container at runtime.

@@ -117,33 +117,38 @@ class AGI(torch.nn.Module):
         # noisy_actions: (bs, pred_horizon, 4, 4)
         # gt_grips: (bs, pred_horizon, 1)
         # noisy_grips: (bs, pred_horizon, 1)
-        gripper_points = self.graph.gripper_node_pos[None, None, :].repeat(gt_actions.shape[0],
-                                                                           gt_actions.shape[1], 1, 1)
+        with torch.autocast(device_type=gt_actions.device.type, enabled=False):
+            gt_actions = gt_actions.float()
+            noisy_actions = noisy_actions.float()
+            gt_grips = gt_grips.float()
+            noisy_grips = noisy_grips.float()
+            gripper_points = self.graph.gripper_node_pos[None, None, :].repeat(gt_actions.shape[0],
+                                                                               gt_actions.shape[1], 1, 1)
 
-        if sep_rot:
-            T_w_n = noisy_actions.view(-1, 4, 4)
-            T_n_w = torch.inverse(T_w_n)
-            T_w_g = gt_actions.view(-1, 4, 4)
-            T_n_g = torch.bmm(T_n_w, T_w_g)
-            T_n_g = T_n_g.view(gt_actions.shape[0], gt_actions.shape[1], 4, 4)
+            if sep_rot:
+                T_w_n = noisy_actions.view(-1, 4, 4)
+                T_n_w = torch.inverse(T_w_n)
+                T_w_g = gt_actions.view(-1, 4, 4)
+                T_n_g = torch.bmm(T_n_w, T_w_g)
+                T_n_g = T_n_g.view(gt_actions.shape[0], gt_actions.shape[1], 4, 4)
 
-            labels_trans = T_n_g[..., :3, 3][:, :, None, :].repeat(1, 1,
-                                                                   gripper_points.shape[-2],
-                                                                   1)
-            T_n_g[..., :3, 3] = 0
-            labels_rot = self.graph.transform_gripper_nodes(gripper_points, T_n_g) - gripper_points
-            labels = torch.cat([labels_trans, labels_rot], dim=-1)
-        else:
-            gripper_points_gt = self.graph.transform_gripper_nodes(gripper_points, gt_actions)
-            gripper_points_noisy = self.graph.transform_gripper_nodes(gripper_points, noisy_actions)
-            labels = gripper_points_gt - gripper_points_noisy
+                labels_trans = T_n_g[..., :3, 3][:, :, None, :].repeat(1, 1,
+                                                                       gripper_points.shape[-2],
+                                                                       1)
+                T_n_g[..., :3, 3] = 0
+                labels_rot = self.graph.transform_gripper_nodes(gripper_points, T_n_g) - gripper_points
+                labels = torch.cat([labels_trans, labels_rot], dim=-1)
+            else:
+                gripper_points_gt = self.graph.transform_gripper_nodes(gripper_points, gt_actions)
+                gripper_points_noisy = self.graph.transform_gripper_nodes(gripper_points, noisy_actions)
+                labels = gripper_points_gt - gripper_points_noisy
 
-        if delta_grip:
-            labels_grip = gt_grips - noisy_grips
-        else:
-            labels_grip = gt_grips
-        labels_grip = labels_grip[:, :, None, :].repeat(1, 1, gripper_points.shape[-2], 1)
-        labels = torch.cat([labels, labels_grip], dim=-1)
+            if delta_grip:
+                labels_grip = gt_grips - noisy_grips
+            else:
+                labels_grip = gt_grips
+            labels_grip = labels_grip[:, :, None, :].repeat(1, 1, gripper_points.shape[-2], 1)
+            labels = torch.cat([labels, labels_grip], dim=-1)
         return labels
 
     def get_transformed_node_pos(self, actions, transform=True):
@@ -248,9 +253,7 @@ class AGI(torch.nn.Module):
     def get_demo_scene_emb(self, data):
         bs = data.actions.shape[0]
         demo_scene_node_embds, demo_scene_node_pos, demo_scene_node_batch = \
-            self.scene_encoder(None,
-                               data.pos_demos,
-                               data.batch_demos)
+            self._scene_encoder_forward(data.pos_demos, data.batch_demos)
         demo_scene_node_embds = to_dense_batch(demo_scene_node_embds, demo_scene_node_batch, fill_value=0)[0]
         demo_scene_node_embds = demo_scene_node_embds.view(bs, self.num_demos, self.traj_horizon, -1,
                                                            self.local_embd_dim)
@@ -260,12 +263,15 @@ class AGI(torch.nn.Module):
 
     def get_live_scene_emb(self, data):
         current_scene_node_embds, current_scene_node_pos, current_scene_node_batch = \
-            self.scene_encoder(None,
-                               data.pos_obs,
-                               data.batch_pos_obs)
+            self._scene_encoder_forward(data.pos_obs, data.batch_pos_obs)
         current_scene_node_embds = to_dense_batch(current_scene_node_embds, current_scene_node_batch, fill_value=0)[0]
         current_scene_node_pos = to_dense_batch(current_scene_node_pos, current_scene_node_batch, fill_value=0)[0]
         return current_scene_node_embds, current_scene_node_pos
+
+    def _scene_encoder_forward(self, pos, batch):
+        # torch_cluster.fps does not support bf16 inputs, so keep scene encoding in fp32.
+        with torch.autocast(device_type=pos.device.type, enabled=False):
+            return self.scene_encoder(None, pos.float(), batch)
 
     def _get_current_gripper_mask(self):
         return self.graph.graph.gripper_time == self.traj_horizon
