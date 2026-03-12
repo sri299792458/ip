@@ -37,6 +37,7 @@ PREFILL_MIN_ITEMS="${PREFILL_MIN_ITEMS:-$((256 * BATCH_SIZE))}"
 PREFILL_CHUNK_TASKS="${PREFILL_CHUNK_TASKS:-128}"
 SAVE_EVERY="${SAVE_EVERY:-$((PROBE_STEPS + 1))}"
 RUN_NAME="${RUN_NAME:-ip_train_only_b${BATCH_SIZE}_${SLURM_JOB_ID:-manual}}"
+COMPUTE_EMBEDDINGS="${COMPUTE_EMBEDDINGS:-0}"
 
 NUM_DEMOS_PER_TASK=3
 PCD_DTYPE=float16
@@ -224,12 +225,17 @@ echo "run_name=$RUN_NAME"
 echo "batch_size=$BATCH_SIZE num_workers=$TRAIN_NUM_WORKERS"
 echo "probe_steps=$PROBE_STEPS"
 echo "prefill_min_items=$PREFILL_MIN_ITEMS prefill_chunk_tasks=$PREFILL_CHUNK_TASKS"
+echo "compute_embeddings=$COMPUTE_EMBEDDINGS"
 echo "hot_data_dir=$HOT_DATA_DIR"
 
 TRAIN_COUNT="$(count_data_files)"
 TASK_START="$GEN_TASK_START"
 while [ "$TRAIN_COUNT" -lt "$PREFILL_MIN_ITEMS" ]; do
   echo "Prefill chunk: have=$TRAIN_COUNT target=$PREFILL_MIN_ITEMS task_start=$TASK_START num_tasks=$PREFILL_CHUNK_TASKS"
+  EMBEDDING_ARGS=""
+  if [ "$COMPUTE_EMBEDDINGS" = "1" ]; then
+    EMBEDDING_ARGS="--compute_embeddings --scene_encoder_path \"$SCENE_ENCODER_CONTAINER_PATH\" --device cuda"
+  fi
   container_exec "
     export PYOPENGL_PLATFORM=egl
     python -m ip.scripts.generate_pseudo_demos \
@@ -243,7 +249,8 @@ while [ "$TRAIN_COUNT" -lt "$PREFILL_MIN_ITEMS" ]; do
       --storage_format steps \
       --pcd_storage_dtype $PCD_DTYPE \
       --num_demos_per_task $NUM_DEMOS_PER_TASK $NUM_DEMOS_PER_TASK \
-      --gripper_mesh_path \"$MESH_CONTAINER_PATH\"
+      --gripper_mesh_path \"$MESH_CONTAINER_PATH\" \
+      $EMBEDDING_ARGS
   "
   TASK_START=$((TASK_START + PREFILL_CHUNK_TASKS))
   TRAIN_COUNT="$(count_data_files)"

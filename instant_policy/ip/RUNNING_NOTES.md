@@ -2740,6 +2740,10 @@ root: Data = Data(pos_demos=[40960, 3], graps_demos=[1, 2, 10, 1], batch_demos=[
   - pre-fills a local dataset on `/scratch.local`
   - stops generation completely
   - runs `train_h100.py` on the static local dataset to measure trainer-only throughput
+- [probe_h100_train_only_embeddings.slurm](/home/srinivas/Desktop/ip/apptainer/probe_h100_train_only_embeddings.slurm)
+  - same trainer-only setup
+  - but the prefill dataset is generated with `--compute_embeddings`
+  - intended to measure whether precomputed demo/live scene embeddings materially increase trainer throughput
 
 ### Slurm Path Bug
 - New Slurm scripts must not derive repo paths from `BASH_SOURCE[0]`.
